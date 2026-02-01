@@ -1,4 +1,8 @@
 TODO:
+- notice the author is obtaining the mvg embedding per frame from VGGT already (implecit contain cam info). Maybe no need to condition on cam again? Along the line, set time dim all the same maybe have positive effect?
+- dynamic: differ the time to approximate the token similarity when self attn
+- static scene at different timepoint: how much to correlative should only relates the cam pose inrellecant to the frame order? set the same?
+
 - argue: the video MLLM in fact should condition on viewperspectives rather frame_id.
     - evidence: performance on spatail reasoning tasks not changes.
     - if we ondition on viewperpseticves (use trans, rot, or alone)

@@ -8,6 +8,7 @@ from transformers.models.qwen2_5_vl.modeling_qwen2_5_vl import Qwen2_5_VLCausalL
 
 from src.qwenvl.model.connector import get_connector
 from src.qwenvl.model.spatial_encoder import VGGTSpatialEncoderConfig, VGGTSpatialEncoderPreTrainedModel
+from src.qwenvl.external.vggt.utils.pose_enc import pose_encoding_to_extri_intri
 
 
 class SpatialMLLMConfig(Qwen2_5_VLConfig):
@@ -117,7 +118,10 @@ class SpatialMLLMForConditionalGeneration(Qwen2_5_VLForConditionalGeneration):
                     )
 
                 # get spatial embeddings
-                spatial_embeds_list, patch_start_idx = self.spatial_encoder(image_tchw)
+                spatial_embeds_list, patch_start_idx, camera_encs = self.spatial_encoder(image_tchw, return_cam_enc=True)
+                
+                # TODO: Add K and Pose estimation for images (currently placeholder)
+                # print("Warning: K and Pose estimation for images not implemented yet (TODO placeholder)")
 
                 # fuse video and spatial embeddings
                 fused_embeds = self.connector(
@@ -187,9 +191,14 @@ class SpatialMLLMForConditionalGeneration(Qwen2_5_VLForConditionalGeneration):
                     attention_mask,
                 )
                 self.rope_deltas = rope_deltas
+                # print(f"Prefill Position_ids: {position_ids.shape}") # 3, batch_size, seq_length
+                # print(f"Prefill Early Position_ids: {position_ids[:,:,:10]}") # 3, batch_size, seq_length
+                # print(f"Prefill Middle Position_ids: {position_ids[:,:,1500:1510]}") # 3, batch_size, seq_length
+                # print(f"Prefill Late Position_ids: {position_ids[:,:,-10:]}") # 3, batch_size, seq_length
             # then use the prev pre-calculated rope-deltas to get the correct position ids
             else:
                 batch_size, seq_length, _ = inputs_embeds.shape
+                assert seq_length == 1, "seq_length must be 1 for generation"
                 delta = (
                     (cache_position[0] + self.rope_deltas).to(inputs_embeds.device) if cache_position is not None else 0
                 )
@@ -198,7 +207,7 @@ class SpatialMLLMForConditionalGeneration(Qwen2_5_VLForConditionalGeneration):
                 if cache_position is not None:  # otherwise `deltas` is an int `0`
                     delta = delta.repeat_interleave(batch_size // delta.shape[0], dim=0)
                 position_ids = position_ids.add(delta)
-                position_ids = position_ids.unsqueeze(0).expand(3, -1, -1)
+                position_ids = position_ids.unsqueeze(0).expand(3, -1, -1)# purely text, therefore naive repeat along 3 dims
 
         outputs = self.model(
             input_ids=None,
@@ -288,3 +297,15 @@ class SpatialMLLMForConditionalGeneration(Qwen2_5_VLForConditionalGeneration):
             model_inputs["video_tchw"] = None
 
         return model_inputs
+
+if __name__ == "__main__":
+    config = SpatialMLLMConfig()
+    model = SpatialMLLMForConditionalGeneration(config)
+    model.to("cuda")
+    model.eval()
+
+    input_ids = torch.randint(0, config.vocab_size, (1, 10))
+    attention_mask = torch.ones(1, 10)
+    position_ids = torch.arange(10).unsqueeze(0).expand(3, -1, -1)
+    outputs = model(input_ids=input_ids, attention_mask=attention_mask, position_ids=position_ids)
+    print(outputs)
