@@ -16,10 +16,14 @@
 DATA_ROOT="/data/horse/ws/jixu233b-metadata_ws/datasets"
 MODELS_ROOT="/data/horse/ws/jixu233b-metadata_ws/models/Spatial-MLLM"
 
+# tso
+DATA_ROOT="/mnt/nct-zfs/TCO-All/SharedDatasets"
+MODELS_ROOT="/mnt/cluster/workspaces/jinjingxu/proj/vlm/SpatialMllmHallucinate/third_party/Spatial-MLLM"
+
 # activate conda
-source /software/rapids/r24.10/Anaconda3/2024.02-1/etc/profile.d/conda.sh
-conda activate /data/horse/ws/jixu233b-3d_ws/envs/spatial-mllm
-module load CUDA/12.4.0 # nvcc
+# source /software/rapids/r24.10/Anaconda3/2024.02-1/etc/profile.d/conda.sh
+# conda activate /data/horse/ws/jixu233b-3d_ws/envs/spatial-mllm
+# module load CUDA/12.4.0 # nvcc
 
 cd "$(dirname "$0")"
 cd ../..
@@ -55,6 +59,8 @@ QUESTION_TYPE_LIST=(
     "object_size_estimation"
     "room_size_estimation"
 )
+SCENE_NAME_LIST=()  # By default, empty array means all scenes will be evaluated
+SCENE_NAME_LIST=("42446103")  # By default, empty array means all scenes will be evaluated
 
 # QUESTION_TYPES=("${QUESTION_TYPE_LIST[@]}") #all cases
 # QUESTION_TYPES=("${QUESTION_TYPE_LIST[3]}" "${QUESTION_TYPE_LIST[4]}" "${QUESTION_TYPE_LIST[5]}") #ego. 
@@ -88,7 +94,7 @@ for nframe in "${nframes[@]}"; do
 
     # --- run experiment ---
     # python src/evaluation/vsibench/eval_vsibench.py \
-    python /home/jixu233b/Projects/VLM_3D/SpatialMllmHallucinate/third_party/Spatial-MLLM/src/evaluation/vsibench/eval_vsibench.py \
+    python src/evaluation/vsibench/eval_vsibench.py \
         --model_path $MODEL_PATH \
         --model_type $MODEL_TYPE \
         --nframes $nframe \
@@ -99,6 +105,7 @@ for nframe in "${nframes[@]}"; do
         --batch_size 1 \
         --output_dir "$EXP_DIR" \
         --output_name "eval_result" \
+        ${SCENE_NAME_LIST[@]:+--scene_names ${SCENE_NAME_LIST[@]}} \
         2>&1 | tee -a "$LOG_FILE"
         
     echo ">>> Experiment Finished. Results in $EXP_DIR"

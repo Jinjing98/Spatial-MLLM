@@ -315,6 +315,12 @@ def main(args):
         vsi_data = vsi_data.filter(lambda x: x["question_type"] in args.question_types)
         print(f"Filtered dataset size: {len(vsi_data)}")
     
+    # Filter by scene names if specified
+    if args.scene_names:
+        print(f"Filtering dataset to scene names: {args.scene_names}")
+        vsi_data = vsi_data.filter(lambda x: x["scene_name"] in args.scene_names)
+        print(f"Filtered dataset size: {len(vsi_data)}")
+    
     n_gpu = torch.cuda.device_count()
     if n_gpu <= 0:
         raise RuntimeError("VSIBench evaluation requires at least one CUDA device.")
@@ -411,6 +417,13 @@ if __name__ == "__main__":
         nargs="+",
         default=None,
         help="List of datasets to evaluate (e.g., arkitscenes, scannet, scannetpp). If not specified, all datasets will be evaluated.",
+    )
+    parser.add_argument(
+        "--scene_names",
+        type=str,
+        nargs="+",
+        default=None,
+        help="List of scene names to evaluate. If not specified, all scenes will be evaluated.",
     )
     args = parser.parse_args()
 
