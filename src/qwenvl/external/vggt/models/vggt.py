@@ -72,7 +72,7 @@ class VGGT(nn.Module, PyTorchModelHubMixin):
 
         # Force High Accu float32 when set force: the stragy used in VGGT
         # set True may be more compatible with the aggregator obtained FP16 feature.
-        with torch.cuda.amp.autocast(enabled=head_amp_enabled):
+        with torch.cuda.amp.autocast(enabled=False):
             if self.camera_head is not None:
                 pose_enc_list = self.camera_head(aggregated_tokens_list)
                 predictions["pose_enc"] = pose_enc_list[-1]  # pose encoding of the last iteration
