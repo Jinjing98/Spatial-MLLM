@@ -302,6 +302,19 @@ def main(args):
         video_dir = annotation_dir
 
     vsi_data = load_dataset(str(annotation_dir), "full")["test"]
+    
+    # Filter by datasets if specified
+    if args.datasets:
+        print(f"Filtering dataset to datasets: {args.datasets}")
+        vsi_data = vsi_data.filter(lambda x: x["dataset"] in args.datasets)
+        print(f"Filtered dataset size: {len(vsi_data)}")
+    
+    # Filter by question types if specified
+    if args.question_types:
+        print(f"Filtering dataset to question types: {args.question_types}")
+        vsi_data = vsi_data.filter(lambda x: x["question_type"] in args.question_types)
+        print(f"Filtered dataset size: {len(vsi_data)}")
+    
     n_gpu = torch.cuda.device_count()
     if n_gpu <= 0:
         raise RuntimeError("VSIBench evaluation requires at least one CUDA device.")
@@ -314,7 +327,7 @@ def main(args):
         gpu_ids = [x.strip() for x in cuda_visible_devices.split(",") if x.strip()]
     else:
         gpu_ids = [str(i) for i in range(n_gpu)]
-
+    print('GPU IDs: ', gpu_ids)
     processes = []
     output_paths = []
 
@@ -384,6 +397,20 @@ if __name__ == "__main__":
     parser.add_argument("--output_dir", type=str, default="eval_results", help="Directory to save evaluation results.")
     parser.add_argument(
         "--output_name", type=str, default="eval_vsibench", help="Directory to save evaluation results."
+    )
+    parser.add_argument(
+        "--question_types",
+        type=str,
+        nargs="+",
+        default=None,
+        help="List of question types to evaluate. If not specified, all question types will be evaluated.",
+    )
+    parser.add_argument(
+        "--datasets",
+        type=str,
+        nargs="+",
+        default=None,
+        help="List of datasets to evaluate (e.g., arkitscenes, scannet, scannetpp). If not specified, all datasets will be evaluated.",
     )
     args = parser.parse_args()
 
