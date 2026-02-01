@@ -128,7 +128,7 @@ def space_aware_frame_sampling(vggt, images, K, dtype):
             predictions = vggt(images)
 
     print("Converting pose encoding to extrinsic and intrinsic matrices...")
-    extrinsic, intrinsic = pose_encoding_to_extri_intri(predictions["pose_enc"], images.shape[-2:])
+    extrinsic, intrinsic = pose_encoding_to_extri_intri(predictions["pose_enc"], images.shape[-2:]) #w2c format, JJ confirmed in VGGT source code.
     predictions["extrinsic"] = extrinsic
     predictions["intrinsic"] = intrinsic
 

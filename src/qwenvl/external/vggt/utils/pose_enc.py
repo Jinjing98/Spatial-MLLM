@@ -19,7 +19,7 @@ def extri_intri_to_pose_encoding(
     Args:
         extrinsics (torch.Tensor): Camera extrinsic parameters with shape BxSx3x4,
             where B is batch size and S is sequence length.
-            In OpenCV coordinate system (x-right, y-down, z-forward), representing camera from world transformation.
+            In OpenCV coordinate system (x-right, y-down, z-forward), representing camera from world transformation. (mean w2c, JJ checked in VGGT source code.)
             The format is [R|t] where R is a 3x3 rotation matrix and t is a 3x1 translation vector.
         intrinsics (torch.Tensor): Camera intrinsic parameters with shape BxSx3x3.
             Defined in pixels, with format:
