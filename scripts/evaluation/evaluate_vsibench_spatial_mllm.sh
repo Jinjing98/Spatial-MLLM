@@ -41,6 +41,8 @@ mkdir -p "$OUTPUT_ROOT"
 MODEL_PATH="${MODELS_ROOT}/checkpoints/Spatial-MLLM-v1.1-Instruct-135K"
 MODEL_NAME=$(echo "$MODEL_PATH" | cut -d'/' -f2)
 MODEL_TYPE="spatial-mllm"
+MODEL_TYPE="custom-spatial-mllm"
+
 
 DATASET_LIST=(
     "arkitscenes"
