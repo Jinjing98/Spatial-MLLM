@@ -71,9 +71,10 @@ class VGGTSpatialEncoderPreTrainedModel(PreTrainedModel):
     def preprocess_video_tensors(self, video_tensor: List[torch.Tensor]) -> List[torch.Tensor]:
         return video_tensor
 
-    def forward(self, video_tensor: List[torch.Tensor], **kwargs):
+    def forward(self, video_tensor: List[torch.Tensor], return_cam_enc=False, **kwargs):
         """
         video_tensor: List of [T_i, C, H_i, W_i].
+        return_cam_enc: If True, also return VGGT predictions (pose_enc, etc.)
         """
         group_map = defaultdict(list)
         for original_idx, v in enumerate(video_tensor):
@@ -81,13 +82,23 @@ class VGGTSpatialEncoderPreTrainedModel(PreTrainedModel):
 
         final_outputs = [None] * len(video_tensor)
         final_indices = [None] * len(video_tensor)
+        final_camera_encs = [None] * len(video_tensor) if return_cam_enc else None
 
         for (T, C, H, W), items in group_map.items():
             indices = [item[0] for item in items]
             tensors = [item[1] for item in items]
         
-            batch_input = torch.stack(tensors) 
-            batch_out, batch_start_idx = self.vggt_model.aggregator(batch_input)            
+            batch_input = torch.stack(tensors)
+            
+            if return_cam_enc:
+                batch_predictions = self.vggt_model(batch_input)
+                batch_cam_enc_list = batch_predictions["pose_enc_list"]
+                batch_out = batch_predictions["aggregated_tokens_list"]
+                batch_start_idx = batch_predictions["patch_start_idx"]
+            else:
+                batch_cam_enc_list = []
+                batch_out, batch_start_idx = self.vggt_model.aggregator(batch_input)
+                
             B_curr = len(indices)
             
             for i in range(B_curr):
@@ -98,8 +109,17 @@ class VGGTSpatialEncoderPreTrainedModel(PreTrainedModel):
                 
                 final_outputs[real_idx] = sample_output
                 final_indices[real_idx] = batch_start_idx
+                
+                if return_cam_enc:
+                    sample_cam_enc = []
+                    for layer_cam_tensor in batch_cam_enc_list:
+                        sample_cam_enc.append(layer_cam_tensor[i])
+                    final_camera_encs[real_idx] = sample_cam_enc
         
-        return final_outputs, final_indices
+        if return_cam_enc:
+            return final_outputs, final_indices, final_camera_encs
+        else:
+            return final_outputs, final_indices
     
     def print_trainable_parameters(self) -> None:
         """

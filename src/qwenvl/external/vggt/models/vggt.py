@@ -28,7 +28,7 @@ class VGGT(nn.Module, PyTorchModelHubMixin):
         self.depth_head = DPTHead(dim_in=2 * embed_dim, output_dim=2, activation="exp", conf_activation="expp1") if enable_depth else None
         self.track_head = TrackHead(dim_in=2 * embed_dim, patch_size=patch_size) if enable_track else None
 
-    def forward(self, images: torch.Tensor, query_points: torch.Tensor = None):
+    def forward(self, images: torch.Tensor, query_points: torch.Tensor = None, head_amp_enabled: bool = False):
         """
         Forward pass of the VGGT model.
 
@@ -38,6 +38,8 @@ class VGGT(nn.Module, PyTorchModelHubMixin):
             query_points (torch.Tensor, optional): Query points for tracking, in pixel coordinates.
                 Shape: [N, 2] or [B, N, 2], where N is the number of query points.
                 Default: None
+            head_amp_enabled (bool, optional): Whether to enable autocast for the heads.
+                Default: False
 
         Returns:
             dict: A dictionary containing the following predictions:
@@ -63,8 +65,12 @@ class VGGT(nn.Module, PyTorchModelHubMixin):
         aggregated_tokens_list, patch_start_idx = self.aggregator(images)
 
         predictions = {}
+        
+        # Store aggregator outputs to avoid redundant computation
+        predictions["aggregated_tokens_list"] = aggregated_tokens_list
+        predictions["patch_start_idx"] = patch_start_idx
 
-        with torch.cuda.amp.autocast(enabled=False):
+        with torch.cuda.amp.autocast(enabled=head_amp_enabled):
             if self.camera_head is not None:
                 pose_enc_list = self.camera_head(aggregated_tokens_list)
                 predictions["pose_enc"] = pose_enc_list[-1]  # pose encoding of the last iteration
