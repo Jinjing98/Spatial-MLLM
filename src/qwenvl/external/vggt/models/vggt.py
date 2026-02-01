@@ -39,7 +39,7 @@ class VGGT(nn.Module, PyTorchModelHubMixin):
                 Shape: [N, 2] or [B, N, 2], where N is the number of query points.
                 Default: None
             head_amp_enabled (bool, optional): Whether to enable autocast for the heads.
-                Default: False
+                Default: False # Force (disble fp16 of outer autocast from hf training) high accuracy float32 for pose n depth related computation.
 
         Returns:
             dict: A dictionary containing the following predictions:
@@ -70,6 +70,8 @@ class VGGT(nn.Module, PyTorchModelHubMixin):
         predictions["aggregated_tokens_list"] = aggregated_tokens_list
         predictions["patch_start_idx"] = patch_start_idx
 
+        # Force High Accu float32 when set force: the stragy used in VGGT
+        # set True may be more compatible with the aggregator obtained FP16 feature.
         with torch.cuda.amp.autocast(enabled=head_amp_enabled):
             if self.camera_head is not None:
                 pose_enc_list = self.camera_head(aggregated_tokens_list)

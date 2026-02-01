@@ -1,4 +1,12 @@
 TODO:
+- Here(https://github.com/liruilong940607/prope/issues/11) regaring PRoPE has more intersting regaridng Time dim. 
+    Our sweet pots:
+    - we can alternating xy(or same modality spatial: xyz for pointcloud)
+    - we can think about whether to apply Pose for HighFreq or Low Freq (what about geodist alibi calib?)
+    - is there room for VO-RoPE. it is along the finding of GTA.
+
+
+- CAPE: SE3 only PE is theoretically ONLY condition on camPose.
 - notice the author is obtaining the mvg embedding per frame from VGGT already (implecit contain cam info). Maybe no need to condition on cam again? Along the line, set time dim all the same maybe have positive effect?
 - dynamic: differ the time to approximate the token similarity when self attn
 - static scene at different timepoint: how much to correlative should only relates the cam pose inrellecant to the frame order? set the same?

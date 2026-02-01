@@ -14,6 +14,7 @@
 
 # Global
 DATA_ROOT="/data/horse/ws/jixu233b-metadata_ws/datasets"
+MODELS_ROOT="/data/horse/ws/jixu233b-metadata_ws/models/Spatial-MLLM"
 
 # activate conda
 source /software/rapids/r24.10/Anaconda3/2024.02-1/etc/profile.d/conda.sh
@@ -33,7 +34,7 @@ pwd
 OUTPUT_ROOT="results/vsibench"
 mkdir -p "$OUTPUT_ROOT"
 
-MODEL_PATH="checkpoints/Spatial-MLLM-v1.1-Instruct-135K"
+MODEL_PATH="${MODELS_ROOT}/checkpoints/Spatial-MLLM-v1.1-Instruct-135K"
 MODEL_NAME=$(echo "$MODEL_PATH" | cut -d'/' -f2)
 MODEL_TYPE="spatial-mllm"
 
