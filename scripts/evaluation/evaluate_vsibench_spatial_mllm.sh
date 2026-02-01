@@ -1,7 +1,34 @@
 #!/bin/bash
 
+#SBATCH --nodes=1
+#SBATCH --ntasks=1 #2
+#SBATCH --gres=gpu:1           # use 1 GPU per node (i.e. use one GPU per task)
+#SBATCH --gpus-per-task=1
+#SBATCH --time=00:03:00
+#SBATCH --mem=80G
+#SBATCH --partition=capella
+#SBATCH --mail-user=xvjinjing8@gmail.com
+#SBATCH --mail-type=BEGIN,END,FAIL,REQUEUE,TIME_LIMIT_90
+#SBATCH --error=/data/horse/ws/jixu233b-metadata_ws/hpc_out/%j.err
+#SBATCH --output=/data/horse/ws/jixu233b-metadata_ws/hpc_out/%j.out
+
+# Global
+DATA_ROOT="/data/horse/ws/jixu233b-metadata_ws/datasets"
+
+# activate conda
+source /software/rapids/r24.10/Anaconda3/2024.02-1/etc/profile.d/conda.sh
+conda activate /data/horse/ws/jixu233b-3d_ws/envs/spatial-mllm
+module load CUDA/12.4.0 # nvcc
+
 cd "$(dirname "$0")"
 cd ../..
+
+# This avoids NFS slowdowns.
+export TRITON_CACHE_DIR=/tmp/triton_cache_${USER}
+mkdir -p $TRITON_CACHE_DIR
+
+# Print current directory
+pwd
 
 OUTPUT_ROOT="results/vsibench"
 mkdir -p "$OUTPUT_ROOT"
@@ -9,6 +36,32 @@ mkdir -p "$OUTPUT_ROOT"
 MODEL_PATH="checkpoints/Spatial-MLLM-v1.1-Instruct-135K"
 MODEL_NAME=$(echo "$MODEL_PATH" | cut -d'/' -f2)
 MODEL_TYPE="spatial-mllm"
+
+DATASET_LIST=(
+    "arkitscenes"
+    "scannet"
+    "scannetpp"
+)
+
+QUESTION_TYPE_LIST=(
+    "obj_appearance_order"
+    "object_abs_distance"
+    "object_counting"
+    "object_rel_direction_easy"
+    "object_rel_direction_hard"
+    "object_rel_direction_medium"
+    "object_rel_distance"
+    "object_size_estimation"
+    "room_size_estimation"
+)
+
+# QUESTION_TYPES=("${QUESTION_TYPE_LIST[@]}") #all cases
+# QUESTION_TYPES=("${QUESTION_TYPE_LIST[3]}" "${QUESTION_TYPE_LIST[4]}" "${QUESTION_TYPE_LIST[5]}") #ego. 
+# QUESTION_TYPES=("${QUESTION_TYPE_LIST[0]}" "${QUESTION_TYPE_LIST[1]}" "${QUESTION_TYPE_LIST[6]}") #allo.
+
+DATASETS=("${DATASET_LIST[0]}") #arkitscenes
+# DATASETS=("${DATASET_LIST[@]}") #all datasets
+QUESTION_TYPES=("${QUESTION_TYPE_LIST[6]}") #allo.
 
 nframes=(16)
 
@@ -33,12 +86,15 @@ for nframe in "${nframes[@]}"; do
     } > "$LOG_FILE"
 
     # --- run experiment ---
-    python src/evaluation/vsibench/eval_vsibench.py \
+    # python src/evaluation/vsibench/eval_vsibench.py \
+    python /home/jixu233b/Projects/VLM_3D/SpatialMllmHallucinate/third_party/Spatial-MLLM/src/evaluation/vsibench/eval_vsibench.py \
         --model_path $MODEL_PATH \
         --model_type $MODEL_TYPE \
         --nframes $nframe \
-        --annotation_dir "datasets/evaluation/vsibench" \
-        --video_dir "datasets/evaluation/vsibench" \
+        --annotation_dir "${DATA_ROOT}/vsibench" \
+        --question_types ${QUESTION_TYPES[@]} \
+        --datasets ${DATASETS[@]} \
+        --video_dir "${DATA_ROOT}/vsibench" \
         --batch_size 1 \
         --output_dir "$EXP_DIR" \
         --output_name "eval_result" \
