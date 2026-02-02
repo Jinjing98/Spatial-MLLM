@@ -54,17 +54,16 @@ class CustomQwen2_5_VLModel(Qwen2_5_VLModel):
         # CUSTOMIZATION POINT 1: Replace Decoder Layers
         # ============================================================================
         # Option A: Use standard layers (default)
-        self.layers = nn.ModuleList(
-            [Qwen2_5_VLDecoderLayer(config, layer_idx) for layer_idx in range(config.num_hidden_layers)]
-        )
-        
-        # Option B: Use custom decoder layers (uncomment to use)
-        # from src.qwenvl.model.custom_attention import CustomQwen2DecoderLayer
         # self.layers = nn.ModuleList(
-        #     [CustomQwen2DecoderLayer(config, layer_idx) for layer_idx in range(config.num_hidden_layers)]
+            # [Qwen2_5_VLDecoderLayer(config, layer_idx) for layer_idx in range(config.num_hidden_layers)]
         # )
-        # print(f"[INFO] Using CustomQwen2DecoderLayer for {len(self.layers)} layers")
-        
+        # Option B: Use custom decoder layers (uncomment to use)
+        from src.qwenvl.model.custom_qwen2_5_VLDecoderLayer import CustomQwen2_5_VLDecoderLayer
+        self.layers = nn.ModuleList(
+            [CustomQwen2_5_VLDecoderLayer(config, layer_idx) for layer_idx in range(config.num_hidden_layers)]
+        ) # self.attn used Custom Ones
+        print(f"[INFO] Using CustomQwen2_5_VLDecoderLayer for {len(self.layers)} layers")
+
         self._attn_implementation = config._attn_implementation
         self.norm = Qwen2RMSNorm(config.hidden_size, eps=config.rms_norm_eps)
         
@@ -105,6 +104,10 @@ class CustomQwen2_5_VLModel(Qwen2_5_VLModel):
         # ============================================================================
         # CUSTOMIZATION POINT 3: Add Custom Forward Arguments
         # ============================================================================
+        RoPE_attn_mode: str = 'default',
+        visual_token_mask: Optional[torch.LongTensor] = None,
+        intrisics: Optional[torch.FloatTensor] = None,
+        extrinsics_w2c: Optional[torch.FloatTensor] = None,
         # Add any custom arguments you need to pass through
         # Example: Ks and viewmats for PRoPE
         **kwargs,  # Catch-all for custom arguments
@@ -149,16 +152,20 @@ class CustomQwen2_5_VLModel(Qwen2_5_VLModel):
             cache_position = torch.arange(
                 past_seen_tokens, past_seen_tokens + inputs_embeds.shape[1], device=inputs_embeds.device
             )
+        print(f"Cache position: {cache_position.shape} {cache_position[-1]}")
 
         # ============================================================================
         # CUSTOMIZATION POINT 4: Custom Position IDs Processing
         # ============================================================================
         # The hard coded `3` is for temporal, height and width dimensions
         if position_ids is None:
+            assert 0, 'parsed externally'
             position_ids = cache_position.view(1, 1, -1).expand(3, inputs_embeds.shape[0], -1)
         elif position_ids.dim() == 2:
+            assert 0, 'parsed externally n already have THW'
             position_ids = position_ids[None, ...].expand(3, position_ids.shape[0], -1)
-        
+        else:
+            print(f"Parsed Position ids: {position_ids.shape}")
         # YOUR CUSTOM CODE: Modify position_ids if needed
         # Example: Add spatial biases, modify based on camera parameters, etc.
 
@@ -173,19 +180,42 @@ class CustomQwen2_5_VLModel(Qwen2_5_VLModel):
         # ============================================================================
         # Create position embeddings to be shared across the decoder layers
         
-        # Option A: Standard RoPE (default)
-        position_embeddings = self.rotary_emb(hidden_states, position_ids)
+        #JJ
+        #optionally apply PRoPE for prefill vision tokens
+        is_prefill = inputs_embeds.shape[1] > 1
+        print(f"Is prefill: {is_prefill} inputs_embeds.shape: {inputs_embeds.shape}")
         
-        # Option B: PRoPE with camera parameters (uncomment if using PRoPE)
-        # if 'Ks' in kwargs and 'viewmats' in kwargs:
-        #     position_embeddings = self.rotary_emb(
-        #         hidden_states, 
-        #         position_ids,
-        #         Ks=kwargs['Ks'],
-        #         viewmats=kwargs['viewmats']
-        #     )
-        # else:
-        #     position_embeddings = self.rotary_emb(hidden_states, position_ids)
+        if is_prefill and RoPE_attn_mode == 'PRoPE4VisionToken':
+            assert intrisics is not None and extrinsics_w2c is not None, 'intrisics and extrinsics_w2c must be provided for prefill vision tokens'
+            assert visual_token_mask.any(), 'visual_token_mask must be not all False for prefill vision tokens'
+            assert visual_token_mask.shape == position_ids[0].shape, 'visual_token_mask must be the same shape as position_ids'
+            print('*'*20)
+            print(f'hidden states shape: {hidden_states.shape}')
+            print(f'position_ids shape: {position_ids.shape}')
+            print(f'cache_position shape: {cache_position.shape}')
+            print(f'visual_token_mask shape: {visual_token_mask.shape}')
+            print(f"kwargs['intrisics']: {intrisics.shape}")
+            print(f"kwargs['extrinsics_w2c']: {extrinsics_w2c.shape}")
+            # compute the num of visual tokens
+            num_visual_tokens = visual_token_mask.sum()
+            print(f'num_visual_tokens: {num_visual_tokens}')
+            num_temporal_merged_cams = intrisics.shape[1]
+            print(f'num_temporal_merged_cams: {num_temporal_merged_cams}')
+            print('*'*20)
+
+            position_embeddings = self.rotary_emb(hidden_states, position_ids) #position_ids 3 B S
+            print('position_embeddings cos',position_embeddings[0].shape)
+            print('position_embeddings sin',position_embeddings[1].shape)
+
+            # position_embeddings = self.rotary_emb(
+            #     hidden_states, 
+            #     position_ids,
+            #     Ks=kwargs['Ks'],
+            #     viewmats=kwargs['viewmats']
+            # )
+        else:
+            # Option A: Standard RoPE (default)
+            position_embeddings = self.rotary_emb(hidden_states, position_ids) #position_ids 3 B S
 
         # ============================================================================
         # CUSTOMIZATION POINT 6: Pre-Decoder Processing
