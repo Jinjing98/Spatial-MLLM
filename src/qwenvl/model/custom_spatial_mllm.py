@@ -16,7 +16,6 @@ from transformers.models.qwen2_5_vl.modeling_qwen2_5_vl import Qwen2_5_VLCausalL
 from src.qwenvl.model.connector import get_connector
 from src.qwenvl.model.spatial_encoder import VGGTSpatialEncoderConfig, VGGTSpatialEncoderPreTrainedModel
 from src.qwenvl.external.vggt.utils.pose_enc import pose_encoding_to_extri_intri
-from src.qwenvl.model.custom_qwen2_model import CustomQwen2Model
 
 
 class CustomSpatialMLLMConfig(Qwen2_5_VLConfig):
@@ -35,9 +34,9 @@ class CustomSpatialMLLMConfig(Qwen2_5_VLConfig):
 
 class CustomSpatialMLLMForConditionalGeneration(Qwen2_5_VLForConditionalGeneration):
     """
-    Custom Spatial MLLM that uses CustomQwen2Model as the decoder.
+    Custom Spatial MLLM that uses CustomQwen2.5VLModel as the decoder.
     
-    This replaces the base Qwen2Model decoder with CustomQwen2Model
+    This replaces the base Qwen2.5VLModel decoder with CustomQwen2.5VLModel
     to enable custom forward logic in the language model.
     """
     
@@ -45,25 +44,26 @@ class CustomSpatialMLLMForConditionalGeneration(Qwen2_5_VLForConditionalGenerati
         # Initialize parent class first
         super().__init__(config)
         
-        # Replace the decoder model with custom one
-        if hasattr(self.model, 'model'):
-            print("[INFO] Replacing base Qwen2Model with CustomQwen2Model...")
-            
-            # Store reference to original model
-            original_decoder = self.model.model
-            
-            # Create custom model with same config
-            custom_decoder = CustomQwen2Model(original_decoder.config)
-            
-            # Copy all weights from original to custom model
-            custom_decoder.load_state_dict(original_decoder.state_dict(), strict=False)
-            
-            # Replace the decoder
-            self.model.model = custom_decoder
-            
-            print("[INFO] Successfully replaced decoder with CustomQwen2Model")
-        else:
-            print("[WARNING] Could not find self.model.model - architecture may have changed")
+        # Replace the entire VL model with custom one
+        print("[INFO] Replacing Qwen2_5_VLModel with CustomQwen2_5_VLModel...")
+        
+        from src.qwenvl.model.custom_qwen2_5_VLM import CustomQwen2_5_VLModel
+        
+        # Store reference to original VL model
+        original_vl_model = self.model
+        
+        # Create custom VL model with same config
+        custom_vl_model = CustomQwen2_5_VLModel(original_vl_model.config)
+        
+        # Copy all weights from original to custom model
+        # This preserves the pretrained vision encoder and language model weights
+        custom_vl_model.load_state_dict(original_vl_model.state_dict(), strict=False)
+        
+        # Replace self.model with custom version
+        self.model = custom_vl_model
+        
+        print("[INFO] Successfully replaced Qwen2_5_VLModel with CustomQwen2_5_VLModel")
+        print(f"[INFO] Model type: {type(self.model).__name__}")
         
         # Add spatial components
         self.spatial_encoder = VGGTSpatialEncoderPreTrainedModel(config.spatial_config)
@@ -71,6 +71,20 @@ class CustomSpatialMLLMForConditionalGeneration(Qwen2_5_VLForConditionalGenerati
 
         # Initialize weights and apply final processing
         self.post_init()
+
+        # JJ: extend; notice only work under MODEL_TYPE="custom-spatial-mllm"
+        # RoPE compute mode
+        self.position_ids_compute_mode = "mRoPE"
+        self.position_ids_compute_mode = "mRoPE_woT"
+        assert self.position_ids_compute_mode in ["mRoPE_woT", "mRoPE"]
+        self.RoPE_attn_mode = 'default' # use position_ids
+        self.RoPE_attn_mode = 'PRoPE4VisionToken' # use position_ids
+        assert self.RoPE_attn_mode in ['default', 'PRoPE4VisionToken']
+        # quick Debug Some Function
+        self.offline_debug = False
+        self.model.offline_debug = False
+        self.offline_debug = True
+        self.model.offline_debug = True
 
     def forward(
         self,
@@ -142,6 +156,7 @@ class CustomSpatialMLLMForConditionalGeneration(Qwen2_5_VLForConditionalGenerati
         if inputs_embeds is None:
             inputs_embeds = self.model.embed_tokens(input_ids)
             if pixel_values is not None:
+                assert 0, 'Not tested'
                 assert image_tchw is not None, "`image_tchw` must be provided when `pixel_values` is not None."
                 pixel_values = pixel_values.type(self.visual.dtype)
                 image_tchw = [image_tchw_i.type(self.visual.dtype) for image_tchw_i in image_tchw]
@@ -156,10 +171,7 @@ class CustomSpatialMLLMForConditionalGeneration(Qwen2_5_VLForConditionalGenerati
                     )
 
                 # get spatial embeddings
-                spatial_embeds_list, patch_start_idx, camera_encs = self.spatial_encoder(image_tchw, return_cam_enc=True)
-                
-                # TODO: Add K and Pose estimation for images (currently placeholder)
-                # print("Warning: K and Pose estimation for images not implemented yet (TODO placeholder)")
+                spatial_embeds_list, patch_start_idx = self.spatial_encoder(image_tchw)
 
                 # fuse video and spatial embeddings
                 fused_embeds = self.connector(
@@ -181,8 +193,10 @@ class CustomSpatialMLLMForConditionalGeneration(Qwen2_5_VLForConditionalGenerati
                 assert video_tchw is not None, "`video_tchw` must be provided when `pixel_values_videos` is not None."
                 pixel_values_videos = pixel_values_videos.type(self.visual.dtype)
                 video_tchw = [video_tchw_i.type(self.visual.dtype) for video_tchw_i in video_tchw]
-
                 # get video embeddings
+                # video_tchw:16 3 644 476
+                # video_grid_thw: 8 46 34 (use the vl2.5 vision encoder merge 2 temporal as one)
+                # 12512(8*46*34) 1176 -> 3128 2048
                 video_embeds = self.visual(pixel_values_videos, grid_thw=video_grid_thw)
                 n_video_tokens = (input_ids == self.config.video_token_id).sum().item()
                 n_video_features = video_embeds.shape[0]
@@ -192,15 +206,32 @@ class CustomSpatialMLLMForConditionalGeneration(Qwen2_5_VLForConditionalGenerati
                     )
 
                 # get spatial embeddings
-                spatial_embeds_list, patch_start_idx = self.spatial_encoder(video_tchw, grid_thw=video_grid_thw)
+                spatial_embeds_list, patch_start_idx, camera_encs = self.spatial_encoder(video_tchw, grid_thw=video_grid_thw, return_cam_enc=True)
+                # abtain the pose from B S 9 to B S 3 4 and B S 4 4
+                assert len(camera_encs) == 1 and len(camera_encs[0]) == 4, "camera_encs must have only one element and the last element must be a 9D pose encoding"
+                assert len(camera_encs[0][-1])== 2 * video_grid_thw[0][0]
+                extrinsics_w2c, intrisics = pose_encoding_to_extri_intri(camera_encs[0][-1].unsqueeze(0), video_tchw[0][-1].shape[-2:])
+                print('Camera_encs:')
+                print(f"{extrinsics_w2c.shape} {intrisics.shape}") # 1 4 4 16 4 4
+                print(f"{len(camera_encs)} {len(camera_encs[0])} {camera_encs[0][0].shape}") # 16 9
 
                 # fuse video and spatial embeddings
+                # JJ: TODO: there should be better way?
+                # here to reuse qv2.5 vision encoder (merge 2 temporal frame always)
+                # 3d feature from VGGT is also rearraged in a similar manner (which is unnatually)
+                # 'visual_temporal_merge_size' in 2D;
                 fused_embeds = self.connector(
                     video_embeds=video_embeds,
                     spatial_embeds_list=spatial_embeds_list,
                     patch_start_idx=patch_start_idx,
                     grid_thw=video_grid_thw,
                 )
+
+                # JJ: TODO: does the above fusion make sense?
+                if self.offline_debug:
+                    pass
+                    # fused_embeds = video_embeds
+
 
                 mask = input_ids == self.config.video_token_id
                 mask_unsqueezed = mask.unsqueeze(-1)
@@ -221,14 +252,35 @@ class CustomSpatialMLLMForConditionalGeneration(Qwen2_5_VLForConditionalGenerati
                 or self.rope_deltas is None
                 or (past_key_values is None or past_key_values.get_seq_length() == 0)
             ):
-                position_ids, rope_deltas = self.get_rope_index(
-                    input_ids,
-                    image_grid_thw,
-                    video_grid_thw,
-                    second_per_grid_ts,
-                    attention_mask,
-                )
+                if self.position_ids_compute_mode == "mRoPE":
+                    position_ids, rope_deltas = self.get_rope_index(
+                        input_ids,
+                        image_grid_thw,
+                        video_grid_thw,
+                        second_per_grid_ts,
+                        attention_mask,
+                    )
+                elif self.position_ids_compute_mode == "mRoPE_woT":
+                    from src.qwenvl.get_rope_index_varients import get_rope_index_mRoPE_woT
+                    # internally will set the T as 0 for all
+                    position_ids, rope_deltas = get_rope_index_mRoPE_woT(
+                        self.config,
+                        input_ids,
+                        image_grid_thw,
+                        video_grid_thw,
+                        second_per_grid_ts,
+                        attention_mask,
+                    )
+                else:
+                    raise ValueError(f"Invalid RoPE compute mode: {self.position_ids_compute_mode}")
+
                 self.rope_deltas = rope_deltas
+                print(f"Details:")
+                print(f"image_grid_thw: {image_grid_thw}") # None
+                print(f"video_grid_thw: {video_grid_thw}") # 8 46 34
+                print(f"second_per_grid_ts: {second_per_grid_ts}")
+                print(f"Prefill Position_ids:") # 3, batch_size, seq_length
+                print(f"{position_ids.shape}") # 3, batch_size, seq_length e.g. 3,1,3210
 
             # then use the prev pre-calculated rope-deltas to get the correct position ids
             else:
@@ -243,8 +295,18 @@ class CustomSpatialMLLMForConditionalGeneration(Qwen2_5_VLForConditionalGenerati
                     delta = delta.repeat_interleave(batch_size // delta.shape[0], dim=0)
                 position_ids = position_ids.add(delta)
                 position_ids = position_ids.unsqueeze(0).expand(3, -1, -1)# purely text, therefore naive repeat along 3 dims
+                print(f"Next Position_ids:") # 3, batch_size, 1
+                print(f"{position_ids.shape}") # 3, batch_size, 1
 
-        # This will now call CustomQwen2Model.forward() instead of the original
+            print(f"Early Position_ids:")
+            print(f"({position_ids[:,0,:10]})") # 3, batch_size, seq_length
+            print(f"Middle Position_ids:")
+            #for example: there are (15*25)=375 tokens per img; 375*8=3000, 3210-3000=210 prompt token
+            print(f"({position_ids[:,0,1500:2000:25]})") # 3, batch_size, seq_length
+            print(f"Late Position_ids:")
+            print(f"({position_ids[:,0,-10:]})") # 3, batch_size, seq_length
+
+
         outputs = self.model(
             input_ids=None,
             position_ids=position_ids,
@@ -256,6 +318,9 @@ class CustomSpatialMLLMForConditionalGeneration(Qwen2_5_VLForConditionalGenerati
             output_hidden_states=output_hidden_states,
             return_dict=return_dict,
             cache_position=cache_position,
+            # RoPE_attn_mode=self.RoPE_attn_mode,
+            # intrisics=intrisics[:,::2], #B S 3 3
+            # extrinsics_w2c=extrinsics_w2c[:,::2], #B S 3 4
         )
 
         hidden_states = outputs[0]

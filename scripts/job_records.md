@@ -1,4 +1,25 @@
+Eval Exp: task. room size estimation on all arkit. 150 questions.
+0. spatialmllm sft: default.
+'all': {'micro': 0.5320000018676122, 'macro': 0.5320000018676122}
+1. spatialmllm sft: 2Dfeature_only (wo fusion, mRoPE). 
+2. spatialmllm sft: 3Dfeature_only (wo fusion, mRoPE). 
+
+3. Qvwen vl2.5: (2D only, mRoPE)
+'all': {'micro': 0.29066666692495347, 'macro': 0.29066666692495347}
+
+
 TODO:
+2D token MLP to half; 3D token the other half. Use CAT rather fuse.
+Then for the 2D half we conduct PRoPE.
+
+second_per_grid_ts/tokens_per_second: set to 1 in sft spatialmllm (25 in qwen2.5vl)
+temporal_patch_size: set to 2 both for qwem2.5 and spatialmllm
+this explain why: sft_spatiallmllm need get_rope_index_2 rather get_rope_index_25 (default). sft_spatiallmllm is optimized in a way, that candidate frames are having large view differs! (considering temporal_patch_size still 2, 'the merging' is wrong! )
+
+- the way 2D vl fuse is only somehow safe when coupled with uniform sampling: alwasy consenctive 2 samples. As it can be risky if you sample optimal multiview img from video rather (the merge two imgs have large view changes).
+- VGG infact give u view independent world repre per frame, when merge frame, it can be more like enlarging the mapping.
+-Consider the above, the fusing connector in spatailmlllm is suspicious.
+
 - Here(https://github.com/liruilong940607/prope/issues/11) regaring PRoPE has more intersting regaridng Time dim. 
     Our sweet pots:
     - we can alternating xy(or same modality spatial: xyz for pointcloud)

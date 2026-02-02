@@ -40,8 +40,12 @@ mkdir -p "$OUTPUT_ROOT"
 
 MODEL_PATH="${MODELS_ROOT}/checkpoints/Spatial-MLLM-v1.1-Instruct-135K"
 MODEL_NAME=$(echo "$MODEL_PATH" | cut -d'/' -f2)
+
 MODEL_TYPE="spatial-mllm"
 MODEL_TYPE="custom-spatial-mllm"
+
+# MODEL_TYPE="qwen2.5-vl"
+# MODEL_PATH='Qwen/Qwen2.5-VL-3B-Instruct'
 
 
 DATASET_LIST=(
@@ -70,7 +74,8 @@ SCENE_NAME_LIST=("42446103")  # By default, empty array means all scenes will be
 
 DATASETS=("${DATASET_LIST[0]}") #arkitscenes
 # DATASETS=("${DATASET_LIST[@]}") #all datasets
-QUESTION_TYPES=("${QUESTION_TYPE_LIST[6]}") #allo.
+# QUESTION_TYPES=("${QUESTION_TYPE_LIST[6]}") #allo.
+QUESTION_TYPES=("${QUESTION_TYPE_LIST[8]}") #semantic
 
 nframes=(16)
 
