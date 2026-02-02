@@ -43,7 +43,7 @@ class MLPAddConnector(nn.Module):
             # spatial_embeds: Float[Tensor, "B,S,P,2D"]
             spatial_embeds = spatial_embeds[:, :, patch_start_idx[i]:]
 
-            B, S, P, DD = spatial_embeds.shape
+            B, S, P, DD = spatial_embeds.shape #1 16 1569 2048
             assert B == 1, "batch size should be 1"
 
             # Find corresponding grid_thw rows

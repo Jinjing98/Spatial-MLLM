@@ -155,6 +155,14 @@ class SpatialMLLMForConditionalGeneration(Qwen2_5_VLForConditionalGeneration):
 
                 # get spatial embeddings
                 spatial_embeds_list, patch_start_idx = self.spatial_encoder(video_tchw, grid_thw=video_grid_thw)
+                # spatial_embeds_list, patch_start_idx, camera_encs = self.spatial_encoder(video_tchw, grid_thw=video_grid_thw, head_amp_enabled=True, return_cam_enc=True)
+                # spatial_embeds_list 16 1569 2048
+                # patch_start_idx 5
+                # camera_encs 16 9
+                # assert len(spatial_embeds_list) == len(patch_start_idx) == len(camera_encs), "spatial_embeds_list, patch_start_idx, and camera_encs must have the same length"
+                # assert len(spatial_embeds_list) == 1, "spatial_embeds_list must have only one element"
+                # [-1.3989e-01,  1.8347e-01,  6.7871e-01, -2.9739e-02, -9.7266e-01,
+                #  -1.2732e-01,  8.5632e-02,  1.0127e+00,  9.5068e-01]
 
                 # fuse video and spatial embeddings
                 fused_embeds = self.connector(
@@ -190,11 +198,14 @@ class SpatialMLLMForConditionalGeneration(Qwen2_5_VLForConditionalGeneration):
                     second_per_grid_ts,
                     attention_mask,
                 )
+                print(f"Details:")
+                print(f"image_grid_thw: {image_grid_thw}") # None
+                print(f"video_grid_thw: {video_grid_thw}") # 8 46 34
+                print(f"second_per_grid_ts: {second_per_grid_ts}")
                 self.rope_deltas = rope_deltas
-                # print(f"Prefill Position_ids: {position_ids.shape}") # 3, batch_size, seq_length
-                # print(f"Prefill Early Position_ids: {position_ids[:,:,:10]}") # 3, batch_size, seq_length
-                # print(f"Prefill Middle Position_ids: {position_ids[:,:,1500:1510]}") # 3, batch_size, seq_length
-                # print(f"Prefill Late Position_ids: {position_ids[:,:,-10:]}") # 3, batch_size, seq_length
+                print(f"Prefill Position_ids:") # 3, batch_size, seq_length
+                print(f"{position_ids.shape}") # 3, batch_size, seq_length e.g. 3,1,3210
+
             # then use the prev pre-calculated rope-deltas to get the correct position ids
             else:
                 batch_size, seq_length, _ = inputs_embeds.shape
@@ -208,6 +219,17 @@ class SpatialMLLMForConditionalGeneration(Qwen2_5_VLForConditionalGeneration):
                     delta = delta.repeat_interleave(batch_size // delta.shape[0], dim=0)
                 position_ids = position_ids.add(delta)
                 position_ids = position_ids.unsqueeze(0).expand(3, -1, -1)# purely text, therefore naive repeat along 3 dims
+                print(f"Next Position_ids:") # 3, batch_size, 1
+                print(f"{position_ids.shape}") # 3, batch_size, 1
+
+            print(f"Early Position_ids:")
+            print(f"({position_ids[:,0,:10]})") # 3, batch_size, seq_length
+            print(f"Middle Position_ids:")
+            #for example: there are (15*25)=375 tokens per img; 375*8=3000, 3210-3000=210 prompt token
+            print(f"({position_ids[:,0,1500:2000:25]})") # 3, batch_size, seq_length
+            print(f"Late Position_ids:")
+            print(f"({position_ids[:,0,-10:]})") # 3, batch_size, seq_length
+
 
         outputs = self.model(
             input_ids=None,
