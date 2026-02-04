@@ -91,7 +91,7 @@ class VGGTSpatialEncoderPreTrainedModel(PreTrainedModel):
             batch_input = torch.stack(tensors)
             
             if return_cam_enc:
-                batch_predictions = self.vggt_model(batch_input)
+                batch_predictions = self.vggt_model(batch_input, do_mis=True)# JJ. Enforce reuse of forward() with fp16 model to obtain pose on top of feat list.
                 batch_cam_enc_list = batch_predictions["pose_enc_list"]
                 batch_out = batch_predictions["aggregated_tokens_list"]
                 batch_start_idx = batch_predictions["patch_start_idx"]

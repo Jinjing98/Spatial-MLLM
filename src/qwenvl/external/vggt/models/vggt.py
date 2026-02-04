@@ -28,7 +28,7 @@ class VGGT(nn.Module, PyTorchModelHubMixin):
         self.depth_head = DPTHead(dim_in=2 * embed_dim, output_dim=2, activation="exp", conf_activation="expp1") if enable_depth else None
         self.track_head = TrackHead(dim_in=2 * embed_dim, patch_size=patch_size) if enable_track else None
 
-    def forward(self, images: torch.Tensor, query_points: torch.Tensor = None, head_amp_enabled: bool = False):
+    def forward(self, images: torch.Tensor, query_points: torch.Tensor = None, do_mis: bool = False):
         """
         Forward pass of the VGGT model.
 
@@ -38,8 +38,7 @@ class VGGT(nn.Module, PyTorchModelHubMixin):
             query_points (torch.Tensor, optional): Query points for tracking, in pixel coordinates.
                 Shape: [N, 2] or [B, N, 2], where N is the number of query points.
                 Default: None
-            head_amp_enabled (bool, optional): Whether to enable autocast for the heads.
-                Default: False # Force (disble fp16 of outer autocast from hf training) high accuracy float32 for pose n depth related computation.
+            do_mis (bool, optional): MIS on enable reuse forward() with fp16 model to obtain pose on top of feat list. Default false
 
         Returns:
             dict: A dictionary containing the following predictions:
@@ -70,14 +69,16 @@ class VGGT(nn.Module, PyTorchModelHubMixin):
         predictions["aggregated_tokens_list"] = aggregated_tokens_list
         predictions["patch_start_idx"] = patch_start_idx
 
-        # Force High Accu float32 when set force: the stragy used in VGGT
-        # set True may be more compatible with the aggregator obtained FP16 feature.
-        with torch.cuda.amp.autocast(enabled=head_amp_enabled):
+        # Force High Accu float32 when set False: the stragy used in VGGT
+        # set True (do_mis=True) to be more compatible with the aggregator obtained FP16 feature during MLLM inference.
+        autocast_context = torch.cuda.amp.autocast(dtype=torch.bfloat16) if do_mis else torch.cuda.amp.autocast(enabled=False)
+        
+        with torch.cuda.amp.autocast(enable=False):
             if self.camera_head is not None:
                 pose_enc_list = self.camera_head(aggregated_tokens_list)
                 predictions["pose_enc"] = pose_enc_list[-1]  # pose encoding of the last iteration
                 predictions["pose_enc_list"] = pose_enc_list
-                
+        with autocast_context:
             if self.depth_head is not None:
                 depth, depth_conf = self.depth_head(
                     aggregated_tokens_list, images=images, patch_start_idx=patch_start_idx
