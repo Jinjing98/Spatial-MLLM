@@ -25,7 +25,6 @@ from transformers.models.qwen2_5_vl.modeling_qwen2_5_vl import (
 )
 
 # Import pose-aware rotary embedding utilities
-from src.qwenvl.model.poseaware_rotary import precompute_pose_transform_info
 from transformers.cache_utils import Cache, DynamicCache, StaticCache, SlidingWindowCache
 from transformers.modeling_outputs import BaseModelOutputWithPast
 from transformers.modeling_attn_mask_utils import AttentionMaskConverter
@@ -34,6 +33,7 @@ from transformers.utils import logging
 # JJ Custom modules
 from src.custom_qwenvl.model.custom_qwen2_5_VLDecoderLayer import CustomQwen2_5_VLDecoderLayer
 from src.custom_qwenvl.model.custom_qwen2_5_VLRoPE import CustomQwen2_5_VLRotaryEmbedding
+from src.custom_qwenvl.model.custom_RoPE_utils import precompute_pose_transform_info
 
 
 logger = logging.get_logger(__name__)

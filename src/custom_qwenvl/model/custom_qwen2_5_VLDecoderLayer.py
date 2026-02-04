@@ -8,7 +8,7 @@ from transformers.utils import is_flash_attn_greater_or_equal_2_10, logging
 import torch.nn as nn
 
 # Import pose-aware rotary embedding utilities
-from src.qwenvl.model.poseaware_rotary import apply_poseaware_rotary, apply_poseaware_output_transform
+from src.custom_qwenvl.model.custom_RoPE_utils import apply_poseaware_rotary, apply_poseaware_output_transform
 
 logger = logging.get_logger(__name__)
 

@@ -21,6 +21,7 @@ from src.evaluation.utils.common_utils import (
     chunk_dataset,
     flatten,
     prepare_spatial_mllm_inputs,
+    prepare_spatial_mllm_inputs_with_framesid,
     save_json,
     setup_logging,
 )
@@ -170,7 +171,9 @@ def prepare_chat_batch(
     )
 
     if "spatial-mllm" in model_type:
-        batch = prepare_spatial_mllm_inputs(batch, video_inputs, image_inputs, batch_selected_frames)
+        # batch = prepare_spatial_mllm_inputs(batch, video_inputs, image_inputs, batch_selected_frames)
+        # JJ
+        batch = prepare_spatial_mllm_inputs_with_framesid(batch, video_inputs, image_inputs, batch_selected_frames)
 
     return batch, prompts_text_copy
 

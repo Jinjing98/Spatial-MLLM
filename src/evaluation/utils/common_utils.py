@@ -49,7 +49,56 @@ def prepare_spatial_mllm_inputs(batch, video_inputs, image_inputs):
     })
 
     return batch
+
+# JJ
+def prepare_spatial_mllm_inputs_with_framesid(batch, video_inputs, image_inputs, selected_frames_list=None):
+    """
+        Prepare inputs for Spatial MLLM model.
+        Batch: Dict return by the processor
+        video_input and image_inputs is returned by process_vision_info
         
+        video_inputs: List[torch.Tensor[Int]] | List[torch.Tensor[Float]] | List[List[PIL.Image]]
+        image_inputs: List[PIL.Image]
+        selected_frames_list: List[Optional[List[int]]]
+    """
+    video_tchw = []
+    image_tchw = []
+
+    if video_inputs:
+        for video_input in video_inputs:
+            if isinstance(video_input, torch.Tensor):
+                video_input = video_input.float() / 255.0  # Normalize to [0, 1]
+            elif isinstance(video_input, list) and all(isinstance(img, Image.Image) for img in video_input):
+                # Convert list of PIL Images to tensor
+                video_input = torch.stack([torch.tensor(np.array(img)).permute(2, 0, 1) for img in video_input]).float() / 255.0
+            else:
+                raise ValueError("Unsupported video input format.")
+            video_tchw.append(video_input)
+    
+    if image_inputs:
+        for image_input in image_inputs:
+            if isinstance(image_input, Image.Image):
+                image_input = torch.tensor(np.array(image_input)).permute(2, 0, 1).float() / 255.0
+            else:
+                raise ValueError("Unsupported image input format.")
+            image_tchw.append(image_input)
+
+    batch.update({
+        "video_tchw": video_tchw if video_tchw else None,
+        "image_tchw": image_tchw if image_tchw else None,
+    })
+    
+    # Add selected_frames if provided
+    if selected_frames_list is not None and any(frames is not None for frames in selected_frames_list):
+        # For batch processing, we take the first non-None selected_frames
+        # (assuming batch size is 1 or all items in batch share the same scene)
+        selected_frames = next((frames for frames in selected_frames_list if frames is not None), None)
+        if selected_frames is not None:
+            batch["selected_frames"] = selected_frames
+
+    return batch
+ 
+
 def chunk_dataset(dataset: List[Dict], num_shards: int) -> List[List[Dict]]:
     """Split dataset into roughly equal shards."""
     if num_shards <= 0:

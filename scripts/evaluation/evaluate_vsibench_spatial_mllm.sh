@@ -38,6 +38,8 @@ MODEL_PATH="${MODELS_ROOT}/checkpoints/Spatial-MLLM-v1.1-Instruct-135K"
 # MODEL_NAME=$(echo "$MODEL_PATH" | cut -d'/' -f2)
 MODEL_NAME=$(echo "$MODEL_PATH" | cut -d'/' -f9)
 MODEL_TYPE="spatial-mllm"
+MODEL_TYPE="custom-spatial-mllm"
+
 
 DATASET_LIST=(
     "arkitscenes"
@@ -61,14 +63,14 @@ QUESTION_TYPE_LIST=(
 # QUESTION_TYPES=("${QUESTION_TYPE_LIST[0]}" "${QUESTION_TYPE_LIST[1]}" "${QUESTION_TYPE_LIST[6]}") #allo.
 
 # DATASETS=("${DATASET_LIST[@]}") #all datasets
-# QUESTION_TYPES=("${QUESTION_TYPE_LIST[6]}") #allo.
 # DATASETS=("${DATASET_LIST[1]}") #arkitscenes
 # DATASETS=("${DATASET_LIST[2]}") #arkitscenes
 DATASETS=("${DATASET_LIST[0]}") #arkitscenes
 QUESTION_TYPES=("${QUESTION_TYPE_LIST[@]}") #all cases
+QUESTION_TYPES=("${QUESTION_TYPE_LIST[6]}") #allo.
 
 SCENE_NAME_LIST=()  # By default, empty array means all scenes will be evaluated
-# SCENE_NAME_LIST=("42446103")  # Example: specify particular scenes to evaluate
+SCENE_NAME_LIST=("42446103")  # Example: specify particular scenes to evaluate
 
 nframes=(16)
 

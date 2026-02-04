@@ -20,8 +20,8 @@ from src.qwenvl.external.vggt.utils.pose_enc import pose_encoding_to_extri_intri
 
 # JJ: Custom modules
 from src.custom_qwenvl.model.camera_pose_temporal_merge import downsample_cams
-from src.custom_qwenvl.custom_qwen_2_5_VLM import CustomQwen2_5_VLModel
-from src.custom_qwenvl.model.custom_qwen_2_5_VLRoPE import custom_get_rope_index
+from src.custom_qwenvl.model.custom_qwen2_5_VLM import CustomQwen2_5_VLModel
+from src.custom_qwenvl.model.custom_qwen2_5_VLRoPE import custom_get_rope_index
 
 class CustomSpatialMLLMConfig(Qwen2_5_VLConfig):
     model_type = "custom-spatial-mllm"
@@ -76,6 +76,7 @@ class CustomSpatialMLLMForConditionalGeneration(Qwen2_5_VLForConditionalGenerati
         assert self.position_ids_compute_mode in ["mRoPE_woT", "mRoPE", "mRoPE_readaptT"]
         # RoPE attention in custom decoder layer
         self.RoPE_attn_mode = 'default' # 'PRoPE4VisionToken' # use position_ids
+        self.RoPE_attn_mode = 'PRoPE4VisionToken' # 'PRoPE4VisionToken' # use position_ids
         assert self.RoPE_attn_mode in ['default', 'PRoPE4VisionToken']
         # Used to indenty visual tokens for PRoPE
         self.visual_token_mask = None # directly aligned with position_ids len
