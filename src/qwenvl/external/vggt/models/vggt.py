@@ -73,7 +73,7 @@ class VGGT(nn.Module, PyTorchModelHubMixin):
         # set True (do_mis=True) to be more compatible with the aggregator obtained FP16 feature during MLLM inference.
         autocast_context = torch.cuda.amp.autocast(dtype=torch.bfloat16) if do_mis else torch.cuda.amp.autocast(enabled=False)
         
-        with torch.cuda.amp.autocast(enable=False):
+        with torch.cuda.amp.autocast(enabled=False):
             if self.camera_head is not None:
                 pose_enc_list = self.camera_head(aggregated_tokens_list)
                 predictions["pose_enc"] = pose_enc_list[-1]  # pose encoding of the last iteration
