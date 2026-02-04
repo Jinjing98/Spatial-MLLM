@@ -50,7 +50,7 @@ def load_model_and_processor(model_type: str, model_path: str):
             device_map="cuda",
             attn_implementation="flash_attention_2",
         )
-        processor = Qwen2_5_VLProcessor.from_pretrained(model_path)
+        processor = Qwen2_5_VLProcessor.from_pretrained(model_path, use_fast=True)
         return model, processor
     
     if "spatial-mllm" == model_type:
@@ -66,7 +66,7 @@ def load_model_and_processor(model_type: str, model_path: str):
             device_map="cuda",
             attn_implementation="flash_attention_2",
         )
-        processor = Qwen2_5_VLProcessor.from_pretrained(model_path)
+        processor = Qwen2_5_VLProcessor.from_pretrained(model_path, use_fast=True)
         return model, processor
 
     if "qwen2.5-vl" == model_type:
@@ -78,7 +78,7 @@ def load_model_and_processor(model_type: str, model_path: str):
             device_map="cuda",
             attn_implementation="flash_attention_2",
         )
-        processor = Qwen2_5_VLProcessor.from_pretrained(model_path)
+        processor = Qwen2_5_VLProcessor.from_pretrained(model_path, use_fast=True)
         return model, processor
 
     raise ValueError(f"Unknown model type: {model_type}")
