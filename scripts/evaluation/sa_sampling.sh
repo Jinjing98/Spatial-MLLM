@@ -4,7 +4,7 @@
 #SBATCH --ntasks=1
 #SBATCH --gres=gpu:1
 #SBATCH --gpus-per-task=1
-#SBATCH --time=02:00:00
+#SBATCH --time=03:00:00
 #SBATCH --mem=80G
 #SBATCH --partition=capella
 #SBATCH --mail-user=xvjinjing8@gmail.com
@@ -23,6 +23,7 @@ module load CUDA/12.4.0 # nvcc
 
 cd "$(dirname "$0")"
 cd ../..
+cd "$SLURM_SUBMIT_DIR"
 
 # This avoids NFS slowdowns.
 export TRITON_CACHE_DIR=/tmp/triton_cache_${USER}
@@ -38,11 +39,11 @@ pwd
 BASE_DIR="${DATA_ROOT}/vsibench"
 
 # Number of frames to sample
-NUM_FRAMES="${NUM_FRAMES:-16}"
+# NUM_FRAMES="${NUM_FRAMES:-16}"
 NUM_FRAMES="${NUM_FRAMES:-8}"
 
 # Sampling type: "both" (default), "sa", or "uniform"
-SAMPLING_TYPE="${SAMPLING_TYPE:-both}"
+# SAMPLING_TYPE="${SAMPLING_TYPE:-both}"
 SAMPLING_TYPE="${SAMPLING_TYPE:-sa}"
 
 if [[ "$SAMPLING_TYPE" == "both" || "$SAMPLING_TYPE" == "sa" ]]; then

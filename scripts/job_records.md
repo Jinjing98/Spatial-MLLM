@@ -1,3 +1,8 @@
+04.Feb. 
+2721041: eval on ours_mRoPE_Pose
+2721046: sa_6 gen
+
+
 TODO:
 - Here(https://github.com/liruilong940607/prope/issues/11) regaring PRoPE has more intersting regaridng Time dim. 
     Our sweet pots:

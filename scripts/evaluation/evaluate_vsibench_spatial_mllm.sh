@@ -15,6 +15,7 @@
 # Global
 DATA_ROOT="/data/horse/ws/jixu233b-metadata_ws/datasets"
 MODELS_ROOT="/data/horse/ws/jixu233b-metadata_ws/models/Spatial-MLLM"
+RESULTS_SAVE_ROOT="/home/jixu233b/Projects/VLM_3D/SpatialMllmHallucinate/third_party/Spatial-MLLM"
 
 # activate conda
 source /software/rapids/r24.10/Anaconda3/2024.02-1/etc/profile.d/conda.sh
@@ -23,6 +24,7 @@ module load CUDA/12.4.0 # nvcc
 
 cd "$(dirname "$0")"
 cd ../..
+cd "$SLURM_SUBMIT_DIR"
 
 # This avoids NFS slowdowns.
 export TRITON_CACHE_DIR=/tmp/triton_cache_${USER}
@@ -31,7 +33,8 @@ mkdir -p $TRITON_CACHE_DIR
 # Print current directory
 pwd
 
-OUTPUT_ROOT="results/vsibench"
+# Use absolute path for output to avoid permission issues
+OUTPUT_ROOT="${RESULTS_SAVE_ROOT}/results/vsibench"
 mkdir -p "$OUTPUT_ROOT"
 
 MODEL_PATH="${MODELS_ROOT}/checkpoints/Spatial-MLLM-v1.1-Instruct-135K"
@@ -41,7 +44,7 @@ MODEL_TYPE="spatial-mllm"
 MODEL_TYPE="custom-spatial-mllm"
 MODEL_NAME_SUFFIX="mrope_Pose"
 # MODEL_NAME_SUFFIX=""
-MODEL_NAME="${MODEL_TYPE}/${MODEL_NAME_SUFFIX}"
+MODEL_NAME="${MODEL_TYPE}${MODEL_NAME_SUFFIX}"
 
 
 
@@ -66,15 +69,15 @@ QUESTION_TYPE_LIST=(
 # QUESTION_TYPES=("${QUESTION_TYPE_LIST[3]}" "${QUESTION_TYPE_LIST[4]}" "${QUESTION_TYPE_LIST[5]}") #ego. 
 # QUESTION_TYPES=("${QUESTION_TYPE_LIST[0]}" "${QUESTION_TYPE_LIST[1]}" "${QUESTION_TYPE_LIST[6]}") #allo.
 
-# DATASETS=("${DATASET_LIST[@]}") #all datasets
 # DATASETS=("${DATASET_LIST[1]}") #arkitscenes
 # DATASETS=("${DATASET_LIST[2]}") #arkitscenes
-DATASETS=("${DATASET_LIST[0]}") #arkitscenes
+# DATASETS=("${DATASET_LIST[0]}") #arkitscenes
+DATASETS=("${DATASET_LIST[@]}") #all datasets
 QUESTION_TYPES=("${QUESTION_TYPE_LIST[@]}") #all cases
 # QUESTION_TYPES=("${QUESTION_TYPE_LIST[6]}") #allo.
 
 SCENE_NAME_LIST=()  # By default, empty array means all scenes will be evaluated
-SCENE_NAME_LIST=("42446103")  # Example: specify particular scenes to evaluate
+# SCENE_NAME_LIST=("42446103")  # Example: specify particular scenes to evaluate
 
 nframes=(16)
 

@@ -15,6 +15,7 @@
 # Global
 DATA_ROOT="/data/horse/ws/jixu233b-metadata_ws/datasets"
 MODELS_ROOT="/data/horse/ws/jixu233b-metadata_ws/models/Spatial-MLLM"
+RESULTS_SAVE_ROOT="/home/jixu233b/Projects/VLM_3D/SpatialMllmHallucinate/third_party/Spatial-MLLM"
 
 # activate conda
 source /software/rapids/r24.10/Anaconda3/2024.02-1/etc/profile.d/conda.sh
@@ -23,6 +24,7 @@ module load CUDA/12.4.0 # nvcc
 
 cd "$(dirname "$0")"
 cd ../..
+cd "$SLURM_SUBMIT_DIR"
 
 # This avoids NFS slowdowns.
 export TRITON_CACHE_DIR=/tmp/triton_cache_${USER}
@@ -31,13 +33,18 @@ mkdir -p $TRITON_CACHE_DIR
 # Print current directory
 pwd
 
-OUTPUT_ROOT="results/vsibench-sa-sampling"
+# Use absolute path for output to avoid permission issues
+OUTPUT_ROOT="${RESULTS_SAVE_ROOT}/results/vsibench-sa-sampling"
 mkdir -p "$OUTPUT_ROOT"
 
 MODEL_PATH="${MODELS_ROOT}/checkpoints/Spatial-MLLM-v1.1-Instruct-135K"
 # MODEL_NAME=$(echo "$MODEL_PATH" | cut -d'/' -f2)
-MODEL_NAME=$(echo "$MODEL_PATH" | cut -d'/' -f9)
+# MODEL_NAME=$(echo "$MODEL_PATH" | cut -d'/' -f9)
 MODEL_TYPE="spatial-mllm"
+# MODEL_TYPE="custom-spatial-mllm"
+MODEL_NAME_SUFFIX="adaptedPosID_RoPE"
+MODEL_NAME_SUFFIX=""
+MODEL_NAME="${MODEL_TYPE}${MODEL_NAME_SUFFIX}"
 
 DATASET_LIST=(
     "arkitscenes"
@@ -69,9 +76,10 @@ QUESTION_TYPES=("${QUESTION_TYPE_LIST[@]}") #all cases
 # QUESTION_TYPES=("${QUESTION_TYPE_LIST[6]}") #all cases
 
 SCENE_NAME_LIST=()  # By default, empty array means all scenes will be evaluated
-# SCENE_NAME_LIST=("42446103")  # Example: specify particular scenes to evaluate
+SCENE_NAME_LIST=("42446103")  # Example: specify particular scenes to evaluate
 
-nframes=(16)
+# nframes=(16)
+nframes=(8)
 
 for nframe in "${nframes[@]}"; do
     TIMESTAMP=$(date +"%Y%m%d_%H%M%S")
@@ -106,7 +114,7 @@ for nframe in "${nframes[@]}"; do
         --annotation_dir "${DATA_ROOT}/vsibench" \
         --question_types ${QUESTION_TYPES[@]} \
         --datasets ${DATASETS[@]} \
-        --video_dir "${DATA_ROOT}/vsibench/sa_sampling_16f" \
+        --video_dir "${DATA_ROOT}/vsibench/sa_sampling_${nframe}f" \
         --batch_size 1 \
         --output_dir "$EXP_DIR" \
         --output_name "eval_result" \
