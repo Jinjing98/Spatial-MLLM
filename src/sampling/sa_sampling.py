@@ -298,6 +298,45 @@ def process_videos_on_device(device_id, video_paths, args):
     model = VGGT.from_pretrained(args.model_path).to(device)
 
     for video_path in tqdm(video_paths, desc=f"GPU {device_id} processing videos"):
+        # NOTE JJ: Check if video has already been processed, skip if it has been processed
+        # ////////////////////////////////////////////////////////////////
+        # Check if video has already been processed, skip if it has been processed
+        video_name = Path(video_path).stem        
+        skip_video = True
+        # Check space-aware sampling
+        if args.sampling_type in ["both", "sa"]:
+            sa_dir = os.path.join(args.output_folder, "sa_sampling", video_name)
+            metadata_path = os.path.join(sa_dir, "selected_frames.json")
+            
+            if os.path.exists(metadata_path):
+                try:
+                    with open(metadata_path, 'r') as f:
+                        metadata = json.load(f)
+                    # Verify it has the expected number of frames
+                    if metadata.get("num_frames") != args.num_frames:
+                        skip_video = False
+                except (json.JSONDecodeError, KeyError):
+                    skip_video = False
+            else:
+                skip_video = False
+        
+        # Check uniform sampling
+        if args.sampling_type in ["both", "uniform"]:
+            uniform_dir = os.path.join(args.output_folder, "uniform_sampling", video_name)
+            
+            if os.path.exists(uniform_dir):
+                # Count PNG files to verify completion
+                png_files = glob(os.path.join(uniform_dir, "*.png"))
+                if len(png_files) != args.num_frames:
+                    skip_video = False
+            else:
+                skip_video = False
+        
+        if skip_video:
+            print(f"[GPU {device_id}] Skipping {video_name} (already processed)")
+            continue
+        # ////////////////////////////////////////////////////////////////
+        
         tmp_dir = Path(tempfile.mkdtemp(prefix="sw_sampling_frames_"))
         vr = VideoReader(video_path, ctx=cpu(0))
         num_frames = len(vr)
@@ -323,8 +362,6 @@ def process_videos_on_device(device_id, video_paths, args):
         print(f"[GPU {device_id}] Selected frames: {selected_frames}")
 
         selected_original_indices = [int(frame_indices[idx]) for idx in selected_frames]
-
-        video_name = Path(video_path).stem
 
         # Space-aware sampling
         if args.sampling_type in ["both", "sa"]:
