@@ -35,7 +35,8 @@ OUTPUT_ROOT="results/vsibench"
 mkdir -p "$OUTPUT_ROOT"
 
 MODEL_PATH="${MODELS_ROOT}/checkpoints/Spatial-MLLM-v1.1-Instruct-135K"
-MODEL_NAME=$(echo "$MODEL_PATH" | cut -d'/' -f2)
+# MODEL_NAME=$(echo "$MODEL_PATH" | cut -d'/' -f2)
+MODEL_NAME=$(echo "$MODEL_PATH" | cut -d'/' -f9)
 MODEL_TYPE="spatial-mllm"
 
 DATASET_LIST=(
@@ -56,19 +57,24 @@ QUESTION_TYPE_LIST=(
     "room_size_estimation"
 )
 
-# QUESTION_TYPES=("${QUESTION_TYPE_LIST[@]}") #all cases
 # QUESTION_TYPES=("${QUESTION_TYPE_LIST[3]}" "${QUESTION_TYPE_LIST[4]}" "${QUESTION_TYPE_LIST[5]}") #ego. 
 # QUESTION_TYPES=("${QUESTION_TYPE_LIST[0]}" "${QUESTION_TYPE_LIST[1]}" "${QUESTION_TYPE_LIST[6]}") #allo.
 
-DATASETS=("${DATASET_LIST[0]}") #arkitscenes
 # DATASETS=("${DATASET_LIST[@]}") #all datasets
-QUESTION_TYPES=("${QUESTION_TYPE_LIST[6]}") #allo.
+# QUESTION_TYPES=("${QUESTION_TYPE_LIST[6]}") #allo.
+# DATASETS=("${DATASET_LIST[1]}") #arkitscenes
+# DATASETS=("${DATASET_LIST[2]}") #arkitscenes
+DATASETS=("${DATASET_LIST[0]}") #arkitscenes
+QUESTION_TYPES=("${QUESTION_TYPE_LIST[@]}") #all cases
+
+SCENE_NAME_LIST=()  # By default, empty array means all scenes will be evaluated
+# SCENE_NAME_LIST=("42446103")  # Example: specify particular scenes to evaluate
 
 nframes=(16)
 
 for nframe in "${nframes[@]}"; do
     TIMESTAMP=$(date +"%Y%m%d_%H%M%S")
-    EXP_DIR="${OUTPUT_ROOT}/${MODEL_NAME}-${nframe}f"
+    EXP_DIR="${OUTPUT_ROOT}/${MODEL_NAME}-${MODEL_TYPE}-${nframe}f_${DATASETS}"
     LOG_FILE="${EXP_DIR}/run.log"
 
     mkdir -p "$EXP_DIR"
@@ -88,6 +94,11 @@ for nframe in "${nframes[@]}"; do
 
     # --- run experiment ---
     # python src/evaluation/vsibench/eval_vsibench.py \
+    EXTRA_ARGS=""
+    if [ ${#SCENE_NAME_LIST[@]} -gt 0 ]; then
+        EXTRA_ARGS="--scene_names ${SCENE_NAME_LIST[@]}"
+    fi
+    
     python /home/jixu233b/Projects/VLM_3D/SpatialMllmHallucinate/third_party/Spatial-MLLM/src/evaluation/vsibench/eval_vsibench.py \
         --model_path $MODEL_PATH \
         --model_type $MODEL_TYPE \
@@ -99,6 +110,7 @@ for nframe in "${nframes[@]}"; do
         --batch_size 1 \
         --output_dir "$EXP_DIR" \
         --output_name "eval_result" \
+        $EXTRA_ARGS \
         2>&1 | tee -a "$LOG_FILE"
         
     echo ">>> Experiment Finished. Results in $EXP_DIR"
