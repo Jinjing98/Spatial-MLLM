@@ -26,6 +26,7 @@ from src.evaluation.utils.common_utils import (
 )
 from src.evaluation.vsibench.dataset_utils import MCA_QUESTION_TYPES, NA_QUESTION_TYPES, clean_text, vsi_reward
 
+
 # Constants
 SFT_QUESTION_TEMPLATE = "{Question}"
 SFT_TYPE_TEMPLATE = {
@@ -35,21 +36,21 @@ SFT_TYPE_TEMPLATE = {
 
 def load_model_and_processor(model_type: str, model_path: str):
     """Load model and processor based on type."""
-    # if model_type == "custom-spatial-mllm":
-    #     from transformers import Qwen2_5_VLProcessor
+    if model_type == "custom-spatial-mllm":
+        # JJ Custom modules
+        from src.custom_qwenvl.model.custom_spatial_mllm import CustomSpatialMLLMConfig, CustomSpatialMLLMForConditionalGeneration
+        from transformers import Qwen2_5_VLProcessor
 
-    #     from src.qwenvl.model.custom_spatial_mllm import CustomSpatialMLLMConfig, CustomSpatialMLLMForConditionalGeneration
-
-    #     config = CustomSpatialMLLMConfig.from_pretrained(model_path)
-    #     model = CustomSpatialMLLMForConditionalGeneration.from_pretrained(
-    #         model_path,
-    #         config=config,
-    #         torch_dtype="bfloat16",
-    #         device_map="cuda",
-    #         attn_implementation="flash_attention_2",
-    #     )
-    #     processor = Qwen2_5_VLProcessor.from_pretrained(model_path)
-    #     return model, processor
+        config = CustomSpatialMLLMConfig.from_pretrained(model_path)
+        model = CustomSpatialMLLMForConditionalGeneration.from_pretrained(
+            model_path,
+            config=config,
+            torch_dtype="bfloat16",
+            device_map="cuda",
+            attn_implementation="flash_attention_2",
+        )
+        processor = Qwen2_5_VLProcessor.from_pretrained(model_path)
+        return model, processor
     
     if "spatial-mllm" == model_type:
         from transformers import Qwen2_5_VLProcessor
