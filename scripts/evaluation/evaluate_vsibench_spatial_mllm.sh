@@ -4,7 +4,7 @@
 #SBATCH --ntasks=1 #2
 #SBATCH --gres=gpu:1           # use 1 GPU per node (i.e. use one GPU per task)
 #SBATCH --gpus-per-task=1
-#SBATCH --time=00:03:00
+#SBATCH --time=03:00:00
 #SBATCH --mem=80G
 #SBATCH --partition=capella
 #SBATCH --mail-user=xvjinjing8@gmail.com
@@ -36,9 +36,13 @@ mkdir -p "$OUTPUT_ROOT"
 
 MODEL_PATH="${MODELS_ROOT}/checkpoints/Spatial-MLLM-v1.1-Instruct-135K"
 # MODEL_NAME=$(echo "$MODEL_PATH" | cut -d'/' -f2)
-MODEL_NAME=$(echo "$MODEL_PATH" | cut -d'/' -f9)
+# MODEL_NAME=$(echo "$MODEL_PATH" | cut -d'/' -f9)
 MODEL_TYPE="spatial-mllm"
 MODEL_TYPE="custom-spatial-mllm"
+MODEL_NAME_SUFFIX="mrope_Pose"
+# MODEL_NAME_SUFFIX=""
+MODEL_NAME="${MODEL_TYPE}/${MODEL_NAME_SUFFIX}"
+
 
 
 DATASET_LIST=(
@@ -67,7 +71,7 @@ QUESTION_TYPE_LIST=(
 # DATASETS=("${DATASET_LIST[2]}") #arkitscenes
 DATASETS=("${DATASET_LIST[0]}") #arkitscenes
 QUESTION_TYPES=("${QUESTION_TYPE_LIST[@]}") #all cases
-QUESTION_TYPES=("${QUESTION_TYPE_LIST[6]}") #allo.
+# QUESTION_TYPES=("${QUESTION_TYPE_LIST[6]}") #allo.
 
 SCENE_NAME_LIST=()  # By default, empty array means all scenes will be evaluated
 SCENE_NAME_LIST=("42446103")  # Example: specify particular scenes to evaluate
