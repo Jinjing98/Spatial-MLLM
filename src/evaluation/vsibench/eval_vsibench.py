@@ -51,7 +51,7 @@ def load_model_and_processor(model_type: str, model_path: str):
         processor = Qwen2_5_VLProcessor.from_pretrained(model_path)
         return model, processor
     
-    if "spatial-mllm" in model_type:
+    if "spatial-mllm" == model_type:
         from transformers import Qwen2_5_VLProcessor
 
         from src.qwenvl.model.spatial_mllm import SpatialMLLMConfig, SpatialMLLMForConditionalGeneration
@@ -67,7 +67,7 @@ def load_model_and_processor(model_type: str, model_path: str):
         processor = Qwen2_5_VLProcessor.from_pretrained(model_path)
         return model, processor
 
-    if "qwen2.5-vl" in model_type:
+    if "qwen2.5-vl" == model_type:
         from transformers import Qwen2_5_VLForConditionalGeneration, Qwen2_5_VLProcessor
 
         model = Qwen2_5_VLForConditionalGeneration.from_pretrained(
@@ -82,7 +82,7 @@ def load_model_and_processor(model_type: str, model_path: str):
     raise ValueError(f"Unknown model type: {model_type}")
 
 
-def build_user_message(item: Dict, video_dir: Path, video_nframes: int) -> Dict:
+def build_user_message(item: Dict, video_dir: Path, video_nframes: int) -> Tuple[Dict, Optional[List[int]]]:
     """Create the chat-style message payload for a single sample."""
     # build question
     raw_question = SFT_QUESTION_TEMPLATE.format(Question=item["question"])
@@ -100,6 +100,7 @@ def build_user_message(item: Dict, video_dir: Path, video_nframes: int) -> Dict:
 
     text_content = {"type": "text", "text": question}
     video_content = {"type": "video"}
+    selected_frames = None
 
     if (video_dir / item["dataset"] / (item["scene_name"] + ".mp4")).exists():  # mp4 video file
         video_path = (video_dir / item["dataset"] / (item["scene_name"] + ".mp4")).resolve()
@@ -112,6 +113,13 @@ def build_user_message(item: Dict, video_dir: Path, video_nframes: int) -> Dict:
             len(video_path) == video_nframes
         ), f"Number of frames in {frame_folder} ({len(video_path)}) does not match expected {video_nframes}."
         video_content["video"] = video_path
+        
+        # Load selected_frames if available
+        selected_frames_json = frame_folder / "selected_frames.json"
+        if selected_frames_json.exists():
+            with open(selected_frames_json, 'r') as f:
+                metadata = json.load(f)
+                selected_frames = metadata.get("selected_frames")
     else:
         raise FileNotFoundError(
             f"Data file not found for video_dir" f"{video_dir}, dataset {item['dataset']}, scene {item['scene_name']}"
@@ -120,7 +128,7 @@ def build_user_message(item: Dict, video_dir: Path, video_nframes: int) -> Dict:
     return {
         "role": "user",
         "content": [video_content, text_content],
-    }
+    }, selected_frames
 
 
 def prepare_chat_batch(
@@ -131,7 +139,9 @@ def prepare_chat_batch(
     video_nframes: int,
 ) -> Tuple[Dict, List[str]]:
     """Prepare batch for inference: build prompts, process video, and tokenize."""
-    batch_messages = [[build_user_message(item, video_dir, video_nframes)] for item in batch_data]
+    batch_messages_and_frames = [build_user_message(item, video_dir, video_nframes) for item in batch_data]
+    batch_messages = [[msg] for msg, _ in batch_messages_and_frames]
+    batch_selected_frames = [frames for _, frames in batch_messages_and_frames]
 
     prompts_text = [
         processor.apply_chat_template(example, tokenize=False, add_generation_prompt=True) for example in batch_messages
@@ -159,7 +169,7 @@ def prepare_chat_batch(
     )
 
     if "spatial-mllm" in model_type:
-        batch = prepare_spatial_mllm_inputs(batch, video_inputs, image_inputs)
+        batch = prepare_spatial_mllm_inputs(batch, video_inputs, image_inputs, batch_selected_frames)
 
     return batch, prompts_text_copy
 

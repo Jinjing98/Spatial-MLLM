@@ -85,6 +85,11 @@ class VGGT(nn.Module, PyTorchModelHubMixin):
             #     predictions["depth"] = depth
             #     predictions["depth_conf"] = depth_conf
 
+            # # Only used for sa sampling
+            # JJ FIXME: enable below during inference cause below err
+            #     return F.conv_transpose2d(
+            # RuntimeError: Input type (torch.cuda.FloatTensor) and weight type (CUDABFloat16Type) should be the same
+
             # if self.point_head is not None:
             #     pts3d, pts3d_conf = self.point_head(
             #         aggregated_tokens_list, images=images, patch_start_idx=patch_start_idx

@@ -104,6 +104,7 @@ class SpatialMLLMForConditionalGeneration(Qwen2_5_VLForConditionalGeneration):
         if inputs_embeds is None:
             inputs_embeds = self.model.embed_tokens(input_ids)
             if pixel_values is not None:
+                assert 0, 'Not Entered'
                 assert image_tchw is not None, "`image_tchw` must be provided when `pixel_values` is not None."
                 pixel_values = pixel_values.type(self.visual.dtype)
                 image_tchw = [image_tchw_i.type(self.visual.dtype) for image_tchw_i in image_tchw]

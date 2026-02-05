@@ -52,12 +52,18 @@ class CustomSpatialMLLMForConditionalGeneration(Qwen2_5_VLForConditionalGenerati
         # Store reference to original VL model
         original_vl_model = self.model
         
+        # JJ: 
+        # VGGTEmbeddingMergerConfig
+        print("[INFO] Default temporal patch size: ", original_vl_model.config.vision_config.temporal_patch_size)
+        # original_vl_model.config.vision_config.temporal_patch_size = 1
+        # print("[INFO] Replaced temporal patch size: ", original_vl_model.config.vision_config.temporal_patch_size)
+
         # Create custom VL model with same config
         custom_vl_model = CustomQwen2_5_VLModel(original_vl_model.config)
         
         # Copy all weights from original to custom model
         # This preserves the pretrained vision encoder and language model weights
-        custom_vl_model.load_state_dict(original_vl_model.state_dict(), strict=False)
+        custom_vl_model.load_state_dict(original_vl_model.state_dict(), strict=True)
         
         # Replace self.model with custom version
         self.model = custom_vl_model
@@ -75,10 +81,11 @@ class CustomSpatialMLLMForConditionalGeneration(Qwen2_5_VLForConditionalGenerati
         # JJ: extend; notice only work under MODEL_TYPE="custom-spatial-mllm"
         # RoPE compute mode
         self.position_ids_compute_mode = "mRoPE"
-        self.position_ids_compute_mode = "mRoPE_woT"
-        assert self.position_ids_compute_mode in ["mRoPE_woT", "mRoPE"]
+        # self.position_ids_compute_mode = "mRoPE_readaptT"
+        # self.position_ids_compute_mode = "mRoPE_woT"
+        assert self.position_ids_compute_mode in ["mRoPE_woT", "mRoPE", "mRoPE_readaptT"]
         self.RoPE_attn_mode = 'default' # use position_ids
-        self.RoPE_attn_mode = 'PRoPE4VisionToken' # use position_ids
+        # self.RoPE_attn_mode = 'PRoPE4VisionToken' # use position_ids
         assert self.RoPE_attn_mode in ['default', 'PRoPE4VisionToken']
         # quick Debug Some Function
         self.offline_debug = False
@@ -89,6 +96,7 @@ class CustomSpatialMLLMForConditionalGeneration(Qwen2_5_VLForConditionalGenerati
         self.extrinsics_w2c = None
         # Used to indenty target for PRoPE
         self.visual_token_mask = None # directly aligned with position_ids len
+    
     def forward(
         self,
         input_ids: Optional[torch.LongTensor] = None,
@@ -110,6 +118,7 @@ class CustomSpatialMLLMForConditionalGeneration(Qwen2_5_VLForConditionalGenerati
         rope_deltas: Optional[torch.LongTensor] = None,
         cache_position: Optional[torch.LongTensor] = None,
         second_per_grid_ts: Optional[torch.Tensor] = None,
+        selected_frames: Optional[List[int]] = None, # JJ: used for mRoPE_readaptT under SA strategy
     ) -> Union[Tuple, Qwen2_5_VLCausalLMOutputWithPast]:
         r"""
             labels (`torch.LongTensor` of shape `(batch_size, sequence_length)`, *optional*):
@@ -196,6 +205,8 @@ class CustomSpatialMLLMForConditionalGeneration(Qwen2_5_VLForConditionalGenerati
 
             if pixel_values_videos is not None:
                 assert video_tchw is not None, "`video_tchw` must be provided when `pixel_values_videos` is not None."
+                if self.position_ids_compute_mode == "mRoPE_readaptT":
+                    assert selected_frames is not None, "`selected_frames` must be provided when `position_ids_compute_mode` is `mRoPE_readaptT`"
                 pixel_values_videos = pixel_values_videos.type(self.visual.dtype)
                 video_tchw = [video_tchw_i.type(self.visual.dtype) for video_tchw_i in video_tchw]
                 # get video embeddings
@@ -257,37 +268,43 @@ class CustomSpatialMLLMForConditionalGeneration(Qwen2_5_VLForConditionalGenerati
                 or self.rope_deltas is None
                 or (past_key_values is None or past_key_values.get_seq_length() == 0)
             ):
-                if self.position_ids_compute_mode == "mRoPE":
-                    position_ids, rope_deltas = self.get_rope_index(
-                        input_ids,
-                        image_grid_thw,
-                        video_grid_thw,
-                        second_per_grid_ts,
-                        attention_mask,
-                    )
-                elif self.position_ids_compute_mode == "mRoPE_woT":
-                    from src.qwenvl.get_rope_index_varients import get_rope_index_mRoPE_woT
-                    # internally will set the T as 0 for all
-                    position_ids, rope_deltas, visual_token_mask = get_rope_index_mRoPE_woT(
-                        self.config,
-                        input_ids,
-                        image_grid_thw,
-                        video_grid_thw,
-                        second_per_grid_ts,
-                        attention_mask,
-                    )
-                else:
-                    raise ValueError(f"Invalid RoPE compute mode: {self.position_ids_compute_mode}")
-
-                self.rope_deltas = rope_deltas
+                # JJ: new feature
+                assert self.position_ids_compute_mode in ["mRoPE_woT", "mRoPE", "mRoPE_readaptT"]
+                from src.qwenvl.model.custom_qwen2_5_VLRoPE import custom_get_rope_index
+                position_ids, rope_deltas, visual_token_mask = custom_get_rope_index(
+                    self.config,
+                    input_ids,
+                    image_grid_thw,
+                    video_grid_thw,
+                    second_per_grid_ts,
+                    attention_mask,
+                    position_ids_compute_mode=self.position_ids_compute_mode,
+                    selected_frames_id=selected_frames,
+                    temporal_patch_size=2,
+                )
                 self.visual_token_mask = visual_token_mask # JJ. Indicate in current tokens, what are the vision ones.
-                print(f"Details:")
+            
+                self.rope_deltas = rope_deltas
+
+                print(f"*"*20)
+                print(f"Details During Prefill:")
                 print(f"image_grid_thw: {image_grid_thw}") # None
                 print(f"video_grid_thw: {video_grid_thw}") # 8 46 34
                 print(f"second_per_grid_ts: {second_per_grid_ts}")
                 print(f"Prefill Position_ids:") # 3, batch_size, seq_length
                 print(f"{position_ids.shape}") # 3, batch_size, seq_length e.g. 3,1,3210
-                print(f"Visual token mask: {self.visual_token_mask.shape}") # batch_size, seq_length
+                # print(f"Visual token mask: {self.visual_token_mask.shape}") # batch_size, seq_length
+
+                print(f"Early Text Position_ids:")
+                print(f"({position_ids[:,0,:18]})") # 3, batch_size, seq_length
+                # print(f"Visual token mask: {self.visual_token_mask[0,:100]}")
+                print(f"Middle (vision) Position_ids:")
+                #for example: there are (15*25)=375 tokens per img; 375*8=3000, 3210-3000=210 prompt token
+                print(f"({position_ids[:,0,15:3128+15:391]})") # 3, batch_size, seq_length
+                # print(f"Visual token mask: {self.visual_token_mask[0,1500:3000:125]}")
+                print(f"Later (Most) Position_ids:")
+                print(f"({position_ids[:,0,30:]})") # 3, batch_size, seq_length
+                # print(f"Visual token mask: {self.visual_token_mask[0, -10:]}")
 
             # then use the prev pre-calculated rope-deltas to get the correct position ids
             else:
@@ -304,24 +321,20 @@ class CustomSpatialMLLMForConditionalGeneration(Qwen2_5_VLForConditionalGenerati
                 position_ids = position_ids.unsqueeze(0).expand(3, -1, -1)# purely text, therefore naive repeat along 3 dims
                 print(f"Next Position_ids:") # 3, batch_size, 1
                 print(f"{position_ids.shape}") # 3, batch_size, 1
+                print(f"{position_ids}") # 3, batch_size, 1
                 # JJ FIXME
                 # can be commented, we can also retain.
                 self.visual_token_mask = torch.zeros_like(position_ids)[0]
 
-            print(f"Early Position_ids:")
-            print(f"({position_ids[:,0,:100]})") # 3, batch_size, seq_length
-            print(f"Visual token mask: {self.visual_token_mask[0,:100]}")
-            print(f"Middle Position_ids:")
-            #for example: there are (15*25)=375 tokens per img; 375*8=3000, 3210-3000=210 prompt token
-            print(f"({position_ids[:,0,1500:3000:125]})") # 3, batch_size, seq_length
-            print(f"Visual token mask: {self.visual_token_mask[0,1500:3000:125]}")
-            print(f"Late Position_ids:")
-            print(f"({position_ids[:,0,-10:]})") # 3, batch_size, seq_length
-            print(f"Visual token mask: {self.visual_token_mask[0, -10:]}")
 
+# 
         print('Do downsample based on temporal merge 2...')
         from src.qwenvl.model.custom_cams_downsampling import downsample_cams
-        intrisics_down, extrinsics_w2c_down = downsample_cams(self.intrisics, self.extrinsics_w2c, factor=2)
+        intrisics_down, extrinsics_w2c_down = downsample_cams(self.intrisics, self.extrinsics_w2c, 
+                                        temporal_patch_size=2, 
+                                        extrinsics_sample_strategy="mean")
+        # convert B S 3 4 
+        # extrinsics_w2c_down_dbg = torch.eye(4)[None, None, :, :].expand(intrisics_down.shape[0], intrisics_down.shape[1], -1, -1).to(intrisics_down.device)
 
         outputs = self.model(
             input_ids=None,

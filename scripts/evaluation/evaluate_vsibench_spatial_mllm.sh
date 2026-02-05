@@ -39,13 +39,13 @@ OUTPUT_ROOT="results/vsibench"
 mkdir -p "$OUTPUT_ROOT"
 
 MODEL_PATH="${MODELS_ROOT}/checkpoints/Spatial-MLLM-v1.1-Instruct-135K"
-MODEL_NAME=$(echo "$MODEL_PATH" | cut -d'/' -f2)
-
-MODEL_TYPE="spatial-mllm"
-MODEL_TYPE="custom-spatial-mllm"
 
 # MODEL_TYPE="qwen2.5-vl"
 # MODEL_PATH='Qwen/Qwen2.5-VL-3B-Instruct'
+MODEL_NAME=$(echo "$MODEL_PATH" | cut -d'/' -f2)
+
+MODEL_TYPE="spatial-mllm"
+# MODEL_TYPE="custom-spatial-mllm"
 
 
 DATASET_LIST=(
@@ -66,16 +66,16 @@ QUESTION_TYPE_LIST=(
     "room_size_estimation"
 )
 SCENE_NAME_LIST=()  # By default, empty array means all scenes will be evaluated
-SCENE_NAME_LIST=("42446103")  # By default, empty array means all scenes will be evaluated
+# SCENE_NAME_LIST=("42446103")  # By default, empty array means all scenes will be evaluated
 
-# QUESTION_TYPES=("${QUESTION_TYPE_LIST[@]}") #all cases
 # QUESTION_TYPES=("${QUESTION_TYPE_LIST[3]}" "${QUESTION_TYPE_LIST[4]}" "${QUESTION_TYPE_LIST[5]}") #ego. 
 # QUESTION_TYPES=("${QUESTION_TYPE_LIST[0]}" "${QUESTION_TYPE_LIST[1]}" "${QUESTION_TYPE_LIST[6]}") #allo.
 
 DATASETS=("${DATASET_LIST[0]}") #arkitscenes
 # DATASETS=("${DATASET_LIST[@]}") #all datasets
+# QUESTION_TYPES=("${QUESTION_TYPE_LIST[8]}") #semantic
+QUESTION_TYPES=("${QUESTION_TYPE_LIST[@]}") #all cases
 # QUESTION_TYPES=("${QUESTION_TYPE_LIST[6]}") #allo.
-QUESTION_TYPES=("${QUESTION_TYPE_LIST[8]}") #semantic
 
 nframes=(16)
 

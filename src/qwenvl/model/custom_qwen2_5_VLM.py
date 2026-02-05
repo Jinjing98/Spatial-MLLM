@@ -23,6 +23,9 @@ from transformers.models.qwen2_5_vl.modeling_qwen2_5_vl import (
     Qwen2_5_VLRotaryEmbedding,
     Qwen2RMSNorm,
 )
+
+# Import pose-aware rotary embedding utilities
+from src.qwenvl.model.poseaware_rotary import precompute_pose_transform_info
 from transformers.cache_utils import Cache, DynamicCache, StaticCache, SlidingWindowCache
 from transformers.modeling_outputs import BaseModelOutputWithPast
 from transformers.modeling_attn_mask_utils import AttentionMaskConverter
@@ -71,12 +74,12 @@ class CustomQwen2_5_VLModel(Qwen2_5_VLModel):
         # CUSTOMIZATION POINT 2: Replace Rotary Embeddings
         # ============================================================================
         # Option A: Use standard RoPE (default)
-        self.rotary_emb = Qwen2_5_VLRotaryEmbedding(config=config)
+        # self.rotary_emb = Qwen2_5_VLRotaryEmbedding(config=config)
         
         # Option B: Use PRoPE or custom rotary embeddings (uncomment to use)
-        # from src.qwenvl.model.custom_qwen2_5_VLPRoPE import Qwen2_5_VLPRotaryEmbedding
-        # self.rotary_emb = Qwen2_5_VLPRotaryEmbedding(config=config)
-        # print("[INFO] Using custom PRoPE rotary embeddings")
+        from src.qwenvl.model.custom_qwen2_5_VLRoPE import CustomQwen2_5_VLRotaryEmbedding
+        self.rotary_emb = CustomQwen2_5_VLRotaryEmbedding(config=config)
+        print("[INFO] Using custom PRoPE rotary embeddings")
 
         self.gradient_checkpointing = False
         
@@ -207,6 +210,29 @@ class CustomQwen2_5_VLModel(Qwen2_5_VLModel):
             print('position_embeddings cos',position_embeddings[0].shape)
             print('position_embeddings sin',position_embeddings[1].shape)
 
+            # ============================================================================
+            # POSE-AWARE ROTARY: Precompute pose transformation info for attention layers
+            # ============================================================================
+            # Compute head_dim from config
+            head_dim = self.config.hidden_size // self.config.num_attention_heads
+            
+            # Precompute pose transformation matrices and camera-token assignments
+            # JJ: Critical we demonstrate the range is the key to get it work. 
+            pose_info = precompute_pose_transform_info(
+                extrinsics_w2c=extrinsics_w2c,
+                visual_token_mask=visual_token_mask,  # [B, seq_len]
+                head_dim=head_dim,
+                # JJ: FIXME. critical to rm spatial component when conduct PRoPE
+                # scope_range=kwargs.get('scope_range', (0.0, 1.0)),
+                scope_range=kwargs.get('scope_range', (0.0, 0.25)),
+            )
+            print(f"[INFO] Pose-aware rotary precomputed: {pose_info['num_cams']} cameras, "
+                  f"head_dim={head_dim} ({pose_info['num_4d_groups']} groups of 4D)")
+            
+            # Add pose_info to kwargs so it gets passed to decoder layers
+            kwargs['pose_info'] = pose_info
+            # ============================================================================
+
             # position_embeddings = self.rotary_emb(
             #     hidden_states, 
             #     position_ids,
@@ -216,6 +242,8 @@ class CustomQwen2_5_VLModel(Qwen2_5_VLModel):
         else:
             # Option A: Standard RoPE (default)
             position_embeddings = self.rotary_emb(hidden_states, position_ids) #position_ids 3 B S
+            # No pose-aware rotary for non-prefill or non-PRoPE mode
+            kwargs['pose_info'] = None
 
         # ============================================================================
         # CUSTOMIZATION POINT 6: Pre-Decoder Processing

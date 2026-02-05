@@ -24,7 +24,7 @@ def main(
 ):
     torch.cuda.empty_cache()
     # load the model
-    if "spatial-mllm" in model_type:
+    if "spatial-mllm" == model_type:
         model = Qwen2_5_VL_VGGTForConditionalGeneration.from_pretrained(
             model_path,
             torch_dtype="bfloat16",
@@ -32,7 +32,7 @@ def main(
         )
         # Load the processor
         processor = Qwen2_5_VLProcessor.from_pretrained(model_path)
-    elif "qwen2-5-vl" in model_type:
+    elif "qwen2-5-vl" == model_type:
         model = Qwen2_5_VLForConditionalGeneration.from_pretrained(
             model_path,
             torch_dtype="bfloat16",

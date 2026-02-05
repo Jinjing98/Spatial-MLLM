@@ -12,7 +12,7 @@ from PIL import Image
 def setup_logging():
     logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(name)s: %(message)s")
 
-def prepare_spatial_mllm_inputs(batch, video_inputs, image_inputs):
+def prepare_spatial_mllm_inputs(batch, video_inputs, image_inputs, selected_frames_list=None):
     """
         Prepare inputs for Spatial MLLM model.
         Batch: Dict return by the processor
@@ -20,6 +20,7 @@ def prepare_spatial_mllm_inputs(batch, video_inputs, image_inputs):
         
         video_inputs: List[torch.Tensor[Int]] | List[torch.Tensor[Float]] | List[List[PIL.Image]]
         image_inputs: List[PIL.Image]
+        selected_frames_list: List[Optional[List[int]]]
     """
     video_tchw = []
     image_tchw = []
@@ -47,6 +48,14 @@ def prepare_spatial_mllm_inputs(batch, video_inputs, image_inputs):
         "video_tchw": video_tchw if video_tchw else None,
         "image_tchw": image_tchw if image_tchw else None,
     })
+    
+    # Add selected_frames if provided
+    if selected_frames_list is not None and any(frames is not None for frames in selected_frames_list):
+        # For batch processing, we take the first non-None selected_frames
+        # (assuming batch size is 1 or all items in batch share the same scene)
+        selected_frames = next((frames for frames in selected_frames_list if frames is not None), None)
+        if selected_frames is not None:
+            batch["selected_frames"] = selected_frames
 
     return batch
         

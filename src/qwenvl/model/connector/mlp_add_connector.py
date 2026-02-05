@@ -125,6 +125,8 @@ class MLPAddConnector(nn.Module):
         if image_embeds is not None:
             return image_embeds + spatial_embeds
         else:
+            # JJ: FIXME. critical to rm spatial component when conduct PRoPE
+            # return video_embeds #+ spatial_embeds
             return video_embeds + spatial_embeds
 
     def print_trainable_parameters(self) -> None:

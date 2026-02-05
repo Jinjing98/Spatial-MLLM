@@ -8,6 +8,7 @@ sys.path.append(str(Path(__file__).resolve().parents[2]))
 
 from tqdm import tqdm
 
+import json
 import shutil
 import tempfile
 from glob import glob
@@ -17,6 +18,7 @@ import torch
 from PIL import Image
 from torch import cuda
 from torchvision import transforms as TF
+import subprocess
 
 try:
     from decord import VideoReader, cpu  # type: ignore
@@ -227,6 +229,64 @@ def load_and_preprocess_images(image_path_list):
     return images
 
 
+def create_video_from_frames(frame_dir, output_video_path, fps=1):
+    """
+    Create a video from frames in a directory using ffmpeg.
+    
+    Args:
+        frame_dir: Directory containing frame images.
+        output_video_path: Path to save the output video.
+        fps: Frames per second for the output video.
+    """
+    frame_files = sorted(glob(os.path.join(frame_dir, "*.png")))
+    if not frame_files:
+        print(f"No frames found in {frame_dir}, skipping video creation.")
+        return
+    
+    # Create a temporary file list for ffmpeg
+    with tempfile.NamedTemporaryFile(mode='w', suffix='.txt', delete=False) as f:
+        file_list_path = f.name
+        for frame_file in frame_files:
+            f.write(f"file '{os.path.abspath(frame_file)}'\n")
+    
+    try:
+        # Try multiple encoders in order of preference
+        encoders = [
+            ('libopenh264', 'yuv420p'),  # Open H.264 (non-GPL)
+            ('mpeg4', 'yuv420p'),         # MPEG-4 (widely compatible)
+            ('libvpx-vp9', 'yuv420p'),    # VP9 (modern, efficient)
+        ]
+        
+        video_created = False
+        for encoder, pix_fmt in encoders:
+            cmd = [
+                'ffmpeg',
+                '-f', 'concat',
+                '-safe', '0',
+                '-r', str(fps),
+                '-i', file_list_path,
+                '-c:v', encoder,
+                '-pix_fmt', pix_fmt,
+                '-y',  # Overwrite output file if exists
+                output_video_path
+            ]
+            
+            result = subprocess.run(cmd, capture_output=True, text=True)
+            
+            if result.returncode == 0:
+                print(f"Video saved to {output_video_path} using {encoder} encoder")
+                video_created = True
+                break
+        
+        if not video_created:
+            print(f"Error creating video: Could not find a compatible encoder")
+            print(f"Last error: {result.stderr}")
+    finally:
+        # Clean up the temporary file list
+        if os.path.exists(file_list_path):
+            os.remove(file_list_path)
+
+
 def process_videos_on_device(device_id, video_paths, args):
     if not video_paths:
         return
@@ -278,6 +338,21 @@ def process_videos_on_device(device_id, video_paths, args):
 
         print(f"[GPU {device_id}] Saved {len(selected_original_indices)} selected frames to {sa_dir}")
 
+        # Save selected frames metadata
+        metadata = {
+            "scene_name": video_name,
+            "selected_frames": selected_original_indices,
+            "num_frames": len(selected_original_indices)
+        }
+        metadata_path = os.path.join(sa_dir, f"selected_frames.json")
+        with open(metadata_path, 'w') as f:
+            json.dump(metadata, f, indent=2)
+
+        # Create video from space-aware sampled frames if requested
+        if args.save_video:
+            sa_video_path = os.path.join(sa_dir, f"{video_name}_sa_sampling.mp4")
+            create_video_from_frames(sa_dir, sa_video_path, fps=1)
+
         uniform_dir = os.path.join(args.output_folder, "uniform_sampling", video_name)
         os.makedirs(uniform_dir, exist_ok=True)
         if len(frame_indices) <= args.num_frames:
@@ -295,6 +370,11 @@ def process_videos_on_device(device_id, video_paths, args):
 
         print(f"[GPU {device_id}] Saved {len(sampled_indices)} uniform sampled frames to {uniform_dir}")
 
+        # Create video from uniform sampled frames if requested
+        if args.save_video:
+            uniform_video_path = os.path.join(uniform_dir, f"{video_name}_uniform_sampling.mp4")
+            create_video_from_frames(uniform_dir, uniform_video_path, fps=1)
+
         shutil.rmtree(tmp_dir)
         cuda.empty_cache()
 
@@ -302,9 +382,11 @@ def process_videos_on_device(device_id, video_paths, args):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Space-Aware Frame Sampling")
     parser.add_argument("--video_folder", type=str, required=True, help="Path to the input video folder.")
+    parser.add_argument("--video_path", type=str, default=None, help="Path to the input video file.")
     parser.add_argument("--model_path", type=str, required=True, help="Path to the pretrained VGGT model.")
     parser.add_argument("--output_folder", type=str, required=True, help="Path to the output folder for selected frames.")
     parser.add_argument("--num_frames", type=int, default=16, help="Number of frames to sample using space-aware sampling.")
+    parser.add_argument("--save_video", action="store_true", help="Save a video with fps=1 from the sampled frames.")
     args = parser.parse_args()
 
     n_gpu = torch.cuda.device_count()
@@ -317,7 +399,11 @@ if __name__ == "__main__":
         gpu_ids = [str(i) for i in range(n_gpu)]
 
 
-    all_videos = sorted(glob(os.path.join(args.video_folder, "*.mp4")))
+    if args.video_path != None:
+        assert os.path.exists(args.video_path), f"Video path {args.video_path} does not exist."
+        all_videos = [args.video_path]
+    else:
+        all_videos = sorted(glob(os.path.join(args.video_folder, "*.mp4")))
     if not all_videos:
         print("No videos found to process.")
         sys.exit(0)
