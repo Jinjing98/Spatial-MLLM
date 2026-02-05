@@ -12,6 +12,8 @@
 #SBATCH --error=/data/horse/ws/jixu233b-metadata_ws/hpc_out/%j.err
 #SBATCH --output=/data/horse/ws/jixu233b-metadata_ws/hpc_out/%j.out
 
+# test on capella
+
 # Global
 DATA_ROOT="/data/horse/ws/jixu233b-metadata_ws/datasets"
 MODELS_ROOT="/data/horse/ws/jixu233b-metadata_ws/models/Spatial-MLLM"
@@ -64,8 +66,8 @@ MODEL_PATH="${MODELS_ROOT}/checkpoints/Spatial-MLLM-v1.1-Instruct-135K"
 MODEL_TYPE="spatial-mllm"
 MODEL_NAME_SUFFIX=""
 
-# MODEL_TYPE="custom-spatial-mllm"
-# MODEL_NAME_SUFFIX="adaptedPosID_RoPE"
+MODEL_TYPE="custom-spatial-mllm"
+MODEL_NAME_SUFFIX="adaptedPosID_RoPE"
 MODEL_NAME="${MODEL_TYPE}${MODEL_NAME_SUFFIX}"
 
 

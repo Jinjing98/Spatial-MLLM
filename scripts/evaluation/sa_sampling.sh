@@ -4,7 +4,7 @@
 #SBATCH --ntasks=1
 #SBATCH --gres=gpu:1
 #SBATCH --gpus-per-task=1
-#SBATCH --time=03:00:00
+#SBATCH --time=10:00:00
 #SBATCH --mem=80G
 #SBATCH --partition=capella
 #SBATCH --mail-user=xvjinjing8@gmail.com
@@ -39,38 +39,60 @@ pwd
 BASE_DIR="${DATA_ROOT}/vsibench"
 
 # Number of frames to sample
-# NUM_FRAMES="${NUM_FRAMES:-16}"
 NUM_FRAMES="${NUM_FRAMES:-8}"
+# NUM_FRAMES="${NUM_FRAMES:-16}"
+# NUM_FRAMES="${NUM_FRAMES:-32}"
 
 # Sampling type: "both" (default), "sa", or "uniform"
 # SAMPLING_TYPE="${SAMPLING_TYPE:-both}"
 SAMPLING_TYPE="${SAMPLING_TYPE:-sa}"
 
-if [[ "$SAMPLING_TYPE" == "both" || "$SAMPLING_TYPE" == "sa" ]]; then
-    mkdir -p "$BASE_DIR/sa_sampling_${NUM_FRAMES}f"
-fi
-if [[ "$SAMPLING_TYPE" == "both" || "$SAMPLING_TYPE" == "uniform" ]]; then
-    mkdir -p "$BASE_DIR/uniform_sampling_${NUM_FRAMES}f"
+# Dry run mode: set DRY_RUN="--dry_run" to only check anomalies without processing
+# Usage: DRY_RUN="--dry_run" bash scripts/evaluation/sa_sampling.sh
+DRY_RUN="${DRY_RUN:-}"
+
+if [[ -n "$DRY_RUN" ]]; then
+    echo "============================================"
+    echo "DRY RUN MODE: Only checking for anomalies"
+    echo "No files will be created or modified"
+    echo "============================================"
 fi
 
 run_sampling() {
     dataset=$1
-    temp_dir="${BASE_DIR}/${dataset}_temp"
     
-    python src/sampling/sa_sampling.py \
-        --video_folder "${BASE_DIR}/${dataset}" \
-        --model_path "${MODELS_ROOT}/Spatial-MLLM/checkpoints/VGGT-1B" \
-        --output_folder "$temp_dir" \
-        --num_frames $NUM_FRAMES \
-        --sampling_type "$SAMPLING_TYPE"
-
-    if [[ "$SAMPLING_TYPE" == "both" || "$SAMPLING_TYPE" == "sa" ]]; then
-        mv "${temp_dir}/sa_sampling" "${BASE_DIR}/sa_sampling_${NUM_FRAMES}f/${dataset}"
+    if [[ "$SAMPLING_TYPE" == "both" ]]; then
+        # Process SA sampling
+        echo "Processing SA sampling for ${dataset}..."
+        python src/sampling/sa_sampling.py \
+            --video_folder "${BASE_DIR}/${dataset}" \
+            --model_path "${MODELS_ROOT}/Spatial-MLLM/checkpoints/VGGT-1B" \
+            --output_folder "${BASE_DIR}/sa_sampling_${NUM_FRAMES}f/${dataset}" \
+            --num_frames $NUM_FRAMES \
+            --sampling_type "sa" \
+            $DRY_RUN
+        
+        # Process uniform sampling
+        echo "Processing uniform sampling for ${dataset}..."
+        python src/sampling/sa_sampling.py \
+            --video_folder "${BASE_DIR}/${dataset}" \
+            --model_path "${MODELS_ROOT}/Spatial-MLLM/checkpoints/VGGT-1B" \
+            --output_folder "${BASE_DIR}/uniform_sampling_${NUM_FRAMES}f/${dataset}" \
+            --num_frames $NUM_FRAMES \
+            --sampling_type "uniform" \
+            $DRY_RUN
+    else
+        # Single sampling type
+        python src/sampling/sa_sampling.py \
+            --video_folder "${BASE_DIR}/${dataset}" \
+            --model_path "${MODELS_ROOT}/Spatial-MLLM/checkpoints/VGGT-1B" \
+            --output_folder "${BASE_DIR}/${SAMPLING_TYPE}_sampling_${NUM_FRAMES}f/${dataset}" \
+            --num_frames $NUM_FRAMES \
+            --sampling_type "$SAMPLING_TYPE" \
+            $DRY_RUN
     fi
-    if [[ "$SAMPLING_TYPE" == "both" || "$SAMPLING_TYPE" == "uniform" ]]; then
-        mv "${temp_dir}/uniform_sampling" "${BASE_DIR}/uniform_sampling_${NUM_FRAMES}f/${dataset}"
-    fi
-    rmdir "$temp_dir"
+    
+    echo "Sampling complete for ${dataset}"
 }
 
 run_sampling "scannet"
