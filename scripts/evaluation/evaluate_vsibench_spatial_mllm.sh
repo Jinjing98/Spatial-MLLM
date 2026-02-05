@@ -4,7 +4,7 @@
 #SBATCH --ntasks=1 #2
 #SBATCH --gres=gpu:1           # use 1 GPU per node (i.e. use one GPU per task)
 #SBATCH --gpus-per-task=1
-#SBATCH --time=03:00:00
+#SBATCH --time=06:00:00
 #SBATCH --mem=80G
 #SBATCH --partition=capella
 #SBATCH --mail-user=xvjinjing8@gmail.com
@@ -64,6 +64,8 @@ QUESTION_TYPE_LIST=(
     "object_rel_distance"
     "object_size_estimation"
     "room_size_estimation"
+    "route_planning" # missing in previous all
+
 )
 
 # QUESTION_TYPES=("${QUESTION_TYPE_LIST[3]}" "${QUESTION_TYPE_LIST[4]}" "${QUESTION_TYPE_LIST[5]}") #ego. 
@@ -83,7 +85,7 @@ nframes=(16)
 
 for nframe in "${nframes[@]}"; do
     TIMESTAMP=$(date +"%Y%m%d_%H%M%S")
-    EXP_DIR="${OUTPUT_ROOT}/${MODEL_NAME}-${MODEL_TYPE}-${nframe}f_${DATASETS}"
+    EXP_DIR="${OUTPUT_ROOT}/${MODEL_NAME}-${nframe}f_$(IFS=_; echo "${DATASETS[*]}")"
     LOG_FILE="${EXP_DIR}/run.log"
 
     mkdir -p "$EXP_DIR"

@@ -1,7 +1,16 @@
-04.Feb. 
-2721041: eval on ours_mRoPE_Pose
-2721046: sa_6 gen
+05.Feb
+2726917 sa_32_baseline
+2726926 sa_32_ours_adapted
 
+
+04.Feb. 
+2722314 2721046: sa_6 gen
+
+2722743 2721041: eval on ours_mRoPE_Pose
+2722752: sa_32 gen
+2722748: spatial mllm on sa 16
+2722749: spatial mllm on sa 8
+2722750: ours_adaptedRoPE_THW on sa 8
 
 TODO:
 - Here(https://github.com/liruilong940607/prope/issues/11) regaring PRoPE has more intersting regaridng Time dim. 

@@ -4,7 +4,7 @@
 #SBATCH --ntasks=1 #2
 #SBATCH --gres=gpu:1           # use 1 GPU per node (i.e. use one GPU per task)
 #SBATCH --gpus-per-task=1
-#SBATCH --time=00:03:00
+#SBATCH --time=15:00:00
 #SBATCH --mem=80G
 #SBATCH --partition=capella
 #SBATCH --mail-user=xvjinjing8@gmail.com
@@ -40,10 +40,12 @@ mkdir -p "$OUTPUT_ROOT"
 MODEL_PATH="${MODELS_ROOT}/checkpoints/Spatial-MLLM-v1.1-Instruct-135K"
 # MODEL_NAME=$(echo "$MODEL_PATH" | cut -d'/' -f2)
 # MODEL_NAME=$(echo "$MODEL_PATH" | cut -d'/' -f9)
-MODEL_TYPE="spatial-mllm"
-# MODEL_TYPE="custom-spatial-mllm"
+# MODEL_TYPE="spatial-mllm"
+# MODEL_NAME_SUFFIX=""
+
+MODEL_TYPE="custom-spatial-mllm"
 MODEL_NAME_SUFFIX="adaptedPosID_RoPE"
-MODEL_NAME_SUFFIX=""
+
 MODEL_NAME="${MODEL_TYPE}${MODEL_NAME_SUFFIX}"
 
 DATASET_LIST=(
@@ -62,6 +64,7 @@ QUESTION_TYPE_LIST=(
     "object_rel_distance"
     "object_size_estimation"
     "room_size_estimation"
+    "route_planning" # missing in previous all
 )
 
 # QUESTION_TYPES=("${QUESTION_TYPE_LIST[3]}" "${QUESTION_TYPE_LIST[4]}" "${QUESTION_TYPE_LIST[5]}") #ego. 
@@ -76,14 +79,15 @@ QUESTION_TYPES=("${QUESTION_TYPE_LIST[@]}") #all cases
 # QUESTION_TYPES=("${QUESTION_TYPE_LIST[6]}") #all cases
 
 SCENE_NAME_LIST=()  # By default, empty array means all scenes will be evaluated
-SCENE_NAME_LIST=("42446103")  # Example: specify particular scenes to evaluate
+# SCENE_NAME_LIST=("42446103")  # Example: specify particular scenes to evaluate
 
+nframes=(32)
 # nframes=(16)
-nframes=(8)
+# nframes=(8)
 
 for nframe in "${nframes[@]}"; do
     TIMESTAMP=$(date +"%Y%m%d_%H%M%S")
-    EXP_DIR="${OUTPUT_ROOT}/${MODEL_NAME}-${MODEL_TYPE}-${nframe}f_${DATASETS}"
+    EXP_DIR="${OUTPUT_ROOT}/${MODEL_NAME}-${nframe}f_$(IFS=_; echo "${DATASETS[*]}")"
     LOG_FILE="${EXP_DIR}/run.log"
 
     mkdir -p "$EXP_DIR"
