@@ -4,7 +4,7 @@
 #SBATCH --ntasks=1 #2
 #SBATCH --gres=gpu:1           # use 1 GPU per node (i.e. use one GPU per task)
 #SBATCH --gpus-per-task=1
-#SBATCH --time=06:00:00
+#SBATCH --time=10:00:00
 #SBATCH --mem=80G
 #SBATCH --partition=capella
 #SBATCH --mail-user=xvjinjing8@gmail.com
@@ -41,9 +41,11 @@ MODEL_PATH="${MODELS_ROOT}/checkpoints/Spatial-MLLM-v1.1-Instruct-135K"
 # MODEL_NAME=$(echo "$MODEL_PATH" | cut -d'/' -f2)
 # MODEL_NAME=$(echo "$MODEL_PATH" | cut -d'/' -f9)
 MODEL_TYPE="spatial-mllm"
+# MODEL_NAME_SUFFIX=""
+
 MODEL_TYPE="custom-spatial-mllm"
 MODEL_NAME_SUFFIX="mrope_Pose"
-# MODEL_NAME_SUFFIX=""
+
 MODEL_NAME="${MODEL_TYPE}${MODEL_NAME_SUFFIX}"
 
 
@@ -85,7 +87,20 @@ nframes=(16)
 
 for nframe in "${nframes[@]}"; do
     TIMESTAMP=$(date +"%Y%m%d_%H%M%S")
-    EXP_DIR="${OUTPUT_ROOT}/${MODEL_NAME}-${nframe}f_$(IFS=_; echo "${DATASETS[*]}")"
+    
+    # Build dataset suffix
+    DATASET_SUFFIX=""
+    if [ ${#DATASETS[@]} -ne ${#DATASET_LIST[@]} ]; then
+        DATASET_SUFFIX="_$(IFS=_; echo "${DATASETS[*]}")"
+    fi
+    
+    # Build question type suffix
+    QUESTION_SUFFIX=""
+    if [ ${#QUESTION_TYPES[@]} -ne ${#QUESTION_TYPE_LIST[@]} ]; then
+        QUESTION_SUFFIX="_$(IFS=_; echo "${QUESTION_TYPES[*]}")"
+    fi
+    
+    EXP_DIR="${OUTPUT_ROOT}/${MODEL_NAME}-${nframe}f${DATASET_SUFFIX}${QUESTION_SUFFIX}"
     LOG_FILE="${EXP_DIR}/run.log"
 
     mkdir -p "$EXP_DIR"

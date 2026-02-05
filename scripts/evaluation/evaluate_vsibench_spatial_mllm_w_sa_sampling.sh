@@ -37,16 +37,7 @@ pwd
 OUTPUT_ROOT="${RESULTS_SAVE_ROOT}/results/vsibench-sa-sampling"
 mkdir -p "$OUTPUT_ROOT"
 
-MODEL_PATH="${MODELS_ROOT}/checkpoints/Spatial-MLLM-v1.1-Instruct-135K"
-# MODEL_NAME=$(echo "$MODEL_PATH" | cut -d'/' -f2)
-# MODEL_NAME=$(echo "$MODEL_PATH" | cut -d'/' -f9)
-# MODEL_TYPE="spatial-mllm"
-# MODEL_NAME_SUFFIX=""
 
-MODEL_TYPE="custom-spatial-mllm"
-MODEL_NAME_SUFFIX="adaptedPosID_RoPE"
-
-MODEL_NAME="${MODEL_TYPE}${MODEL_NAME_SUFFIX}"
 
 DATASET_LIST=(
     "arkitscenes"
@@ -67,6 +58,21 @@ QUESTION_TYPE_LIST=(
     "route_planning" # missing in previous all
 )
 
+MODEL_PATH="${MODELS_ROOT}/checkpoints/Spatial-MLLM-v1.1-Instruct-135K"
+# MODEL_NAME=$(echo "$MODEL_PATH" | cut -d'/' -f2)
+# MODEL_NAME=$(echo "$MODEL_PATH" | cut -d'/' -f9)
+MODEL_TYPE="spatial-mllm"
+MODEL_NAME_SUFFIX=""
+
+# MODEL_TYPE="custom-spatial-mllm"
+# MODEL_NAME_SUFFIX="adaptedPosID_RoPE"
+MODEL_NAME="${MODEL_TYPE}${MODEL_NAME_SUFFIX}"
+
+
+nframes=(32)
+# nframes=(16)
+# nframes=(8)
+
 # QUESTION_TYPES=("${QUESTION_TYPE_LIST[3]}" "${QUESTION_TYPE_LIST[4]}" "${QUESTION_TYPE_LIST[5]}") #ego. 
 # QUESTION_TYPES=("${QUESTION_TYPE_LIST[0]}" "${QUESTION_TYPE_LIST[1]}" "${QUESTION_TYPE_LIST[6]}") #allo.
 
@@ -81,13 +87,24 @@ QUESTION_TYPES=("${QUESTION_TYPE_LIST[@]}") #all cases
 SCENE_NAME_LIST=()  # By default, empty array means all scenes will be evaluated
 # SCENE_NAME_LIST=("42446103")  # Example: specify particular scenes to evaluate
 
-nframes=(32)
-# nframes=(16)
-# nframes=(8)
+
 
 for nframe in "${nframes[@]}"; do
     TIMESTAMP=$(date +"%Y%m%d_%H%M%S")
-    EXP_DIR="${OUTPUT_ROOT}/${MODEL_NAME}-${nframe}f_$(IFS=_; echo "${DATASETS[*]}")"
+    
+    # Build dataset suffix
+    DATASET_SUFFIX=""
+    if [ ${#DATASETS[@]} -ne ${#DATASET_LIST[@]} ]; then
+        DATASET_SUFFIX="_$(IFS=_; echo "${DATASETS[*]}")"
+    fi
+    
+    # Build question type suffix
+    QUESTION_SUFFIX=""
+    if [ ${#QUESTION_TYPES[@]} -ne ${#QUESTION_TYPE_LIST[@]} ]; then
+        QUESTION_SUFFIX="_$(IFS=_; echo "${QUESTION_TYPES[*]}")"
+    fi
+    
+    EXP_DIR="${OUTPUT_ROOT}/${MODEL_NAME}-${nframe}f${DATASET_SUFFIX}${QUESTION_SUFFIX}"
     LOG_FILE="${EXP_DIR}/run.log"
 
     mkdir -p "$EXP_DIR"

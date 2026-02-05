@@ -170,10 +170,13 @@ def prepare_chat_batch(
         padding_side="left",
     )
 
-    if "spatial-mllm" in model_type:
-        # batch = prepare_spatial_mllm_inputs(batch, video_inputs, image_inputs, batch_selected_frames)
+    if "spatial-mllm" == model_type:
+        batch = prepare_spatial_mllm_inputs(batch, video_inputs, image_inputs)
+    elif "custom-spatial-mllm" == model_type:
         # JJ
         batch = prepare_spatial_mllm_inputs_with_framesid(batch, video_inputs, image_inputs, batch_selected_frames)
+    else:
+        raise ValueError(f"Unknown model type: {model_type}")
 
     return batch, prompts_text_copy
 
