@@ -211,16 +211,16 @@ if __name__ == "__main__":
     
     # Model paths (can be absolute or relative to RESULTS_ROOT)
     # None SA
-    baseline_path = f"{RESULTS_ROOT}/vsibench/suspicious_data-16f-all3datasets/eval_result/metrics_spatial-mllm.json"
+    baseline_path = f"{RESULTS_ROOT}/vsibench/data-16f/eval_result/metrics_spatial-mllm.json"
     compared_paths = [
-        f"{RESULTS_ROOT}/vsibench/custom-spatial-mllmmrope_Pose-custom-spatial-mllm-16f_arkitscenes/eval_result/metrics_custom-spatial-mllm.json",
+        f"{RESULTS_ROOT}/vsibench/custom-spatial-mllmmrope_Pose-custom-spatial-mllm-16f/eval_result/metrics_custom-spatial-mllm.json",
     ]
 
-    # SA
-    baseline_path = f"{RESULTS_ROOT}/vsibench-sa-sampling/spatial-mllm-16f_all/eval_result/metrics_spatial-mllm.json"
-    compared_paths = [
-        f"{RESULTS_ROOT}/vsibench-sa-sampling/spatial-mllm-spatial-mllm-16f_all/eval_result/metrics_spatial-mllm.json",
-    ]
+    # # SA
+    # baseline_path = f"{RESULTS_ROOT}/vsibench-sa-sampling/spatial-mllm-16f_all/eval_result/metrics_spatial-mllm.json"
+    # compared_paths = [
+    #     f"{RESULTS_ROOT}/vsibench-sa-sampling/spatial-mllm-spatial-mllm-16f_all/eval_result/metrics_spatial-mllm.json",
+    # ]
 
     
 

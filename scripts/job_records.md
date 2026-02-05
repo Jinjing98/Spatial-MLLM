@@ -1,6 +1,14 @@
 05.Feb
-2726917 sa_32_baseline
+2728049 2726917 sa_32_baseline
 2726926 sa_32_ours_adapted
+2727270 sa_16 gen with frame_ids
+2728013 2727486: ours_adaptedRoPE_THW on sa 16
+2728007 2727486: ours_adaptedRoPE_THW on sa 32
+2728005 2727730: baseline_THW on sa 32
+2727757: sa_8 gen on arkit
+2728067: ours_mRoPE_Pose on arkit only
+
+
 
 
 04.Feb. 

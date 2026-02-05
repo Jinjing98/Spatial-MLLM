@@ -292,132 +292,199 @@ def process_videos_on_device(device_id, video_paths, args):
         return
 
     os.environ["CUDA_VISIBLE_DEVICES"] = str(device_id)
+    
+    # Clean up stale temporary directories from previous runs
+    tmp_base = tempfile.gettempdir()
+    stale_dirs = glob(os.path.join(tmp_base, "sw_sampling_*"))
+    if stale_dirs:
+        print(f"[GPU {device_id}] Cleaning up {len(stale_dirs)} stale temporary directories...")
+        for stale_dir in stale_dirs:
+            try:
+                if os.path.isdir(stale_dir):
+                    shutil.rmtree(stale_dir)
+            except Exception as e:
+                print(f"[GPU {device_id}] Warning: Could not remove {stale_dir}: {e}")
 
-    device = "cuda"
-    dtype = torch.bfloat16
-    model = VGGT.from_pretrained(args.model_path).to(device)
+    # Skip model loading in dry run mode
+    if not args.dry_run:
+        device = "cuda"
+        dtype = torch.bfloat16
+        model = VGGT.from_pretrained(args.model_path).to(device)
+    else:
+        model = None
+
+    # Statistics tracking
+    total_videos = len(video_paths)
+    skipped_videos = 0
+    process_videos = 0
 
     for video_path in tqdm(video_paths, desc=f"GPU {device_id} processing videos"):
         # NOTE JJ: Check if video has already been processed, skip if it has been processed
         # ////////////////////////////////////////////////////////////////
         # Check if video has already been processed, skip if it has been processed
-        video_name = Path(video_path).stem        
+        video_name = Path(video_path).stem
         skip_video = True
+        anomalies = []
+        
         # Check space-aware sampling
         if args.sampling_type in ["both", "sa"]:
-            sa_dir = os.path.join(args.output_folder, "sa_sampling", video_name)
+            sa_dir = os.path.join(args.output_folder, video_name)
             metadata_path = os.path.join(sa_dir, "selected_frames.json")
             
-            if os.path.exists(metadata_path):
-                try:
-                    with open(metadata_path, 'r') as f:
-                        metadata = json.load(f)
-                    # Verify it has the expected number of frames
-                    if metadata.get("num_frames") != args.num_frames:
-                        skip_video = False
-                except (json.JSONDecodeError, KeyError):
+            if os.path.exists(sa_dir):
+                # Count actual PNG files
+                png_files = glob(os.path.join(sa_dir, "*.png"))
+                png_count = len(png_files)
+                
+                # Check metadata
+                metadata_valid = False
+                if os.path.exists(metadata_path):
+                    try:
+                        with open(metadata_path, 'r') as f:
+                            metadata = json.load(f)
+                        if metadata.get("num_frames") == args.num_frames:
+                            metadata_valid = True
+                    except (json.JSONDecodeError, KeyError):
+                        pass
+                
+                # Both PNG count and metadata must be correct
+                if png_count != args.num_frames:
+                    anomalies.append(f"SA: PNG count {png_count}/{args.num_frames}")
+                    skip_video = False
+                elif not metadata_valid:
+                    anomalies.append(f"SA: metadata invalid")
                     skip_video = False
             else:
+                anomalies.append(f"SA: dir not found")
                 skip_video = False
         
         # Check uniform sampling
         if args.sampling_type in ["both", "uniform"]:
-            uniform_dir = os.path.join(args.output_folder, "uniform_sampling", video_name)
+            uniform_dir = os.path.join(args.output_folder, video_name)
             
             if os.path.exists(uniform_dir):
                 # Count PNG files to verify completion
                 png_files = glob(os.path.join(uniform_dir, "*.png"))
-                if len(png_files) != args.num_frames:
+                png_count = len(png_files)
+                if png_count != args.num_frames:
+                    anomalies.append(f"Uniform: PNG count {png_count}/{args.num_frames}")
                     skip_video = False
             else:
+                anomalies.append(f"Uniform: dir not found")
                 skip_video = False
         
         if skip_video:
-            print(f"[GPU {device_id}] Skipping {video_name} (already processed)")
+            skipped_videos += 1
+            # print(f"[GPU {device_id}] ✓ SKIP: {video_name}")
+            continue
+        else:
+            process_videos += 1
+            print(f"[GPU {device_id}] ✗ PROCESS: {video_name} - {', '.join(anomalies)}")
+        
+        # Dry run mode: skip all actual processing
+        if args.dry_run:
             continue
         # ////////////////////////////////////////////////////////////////
         
-        tmp_dir = Path(tempfile.mkdtemp(prefix="sw_sampling_frames_"))
-        vr = VideoReader(video_path, ctx=cpu(0))
-        num_frames = len(vr)
+        # Only anomaly videos reach here - start actual inference
+        print(f"[GPU {device_id}] Starting inference for {video_name}...")
+        tmp_dir = Path(tempfile.mkdtemp(prefix=f"sw_sampling_{video_name}_gpu{device_id}_"))
+        
+        try:
+            vr = VideoReader(video_path, ctx=cpu(0))
+            num_frames = len(vr)
 
-        if num_frames == 0:
-            raise ValueError(f"No frames found in video: {video_path}")
+            if num_frames == 0:
+                raise ValueError(f"No frames found in video: {video_path}")
 
-        sample_count = min(128, num_frames)
-        frame_indices = np.linspace(0, num_frames - 1, num=sample_count, dtype=int)
+            sample_count = min(128, num_frames)
+            frame_indices = np.linspace(0, num_frames - 1, num=sample_count, dtype=int)
 
-        for i, frame_idx in enumerate(frame_indices):
-            frame = vr[frame_idx].asnumpy()
-            image = Image.fromarray(frame)
-            frame_path = tmp_dir / f"frame_{frame_idx:04d}.png"
-            image.save(frame_path)
+            for i, frame_idx in enumerate(frame_indices):
+                frame = vr[frame_idx].asnumpy()
+                image = Image.fromarray(frame)
+                frame_path = tmp_dir / f"frame_{frame_idx:04d}.png"
+                image.save(frame_path)
 
-        print(f"[GPU {device_id}] Saved {len(frame_indices)} frames to {tmp_dir}")
+            print(f"[GPU {device_id}] Saved {len(frame_indices)} frames to {tmp_dir}")
 
-        frame_image_paths = sorted(glob(str(tmp_dir / "*.png")))
-        images = load_and_preprocess_images(frame_image_paths).to(device, dtype=dtype)
-        K = min(args.num_frames, images.shape[0])
-        selected_frames = space_aware_frame_sampling(model, images, K, dtype)
-        print(f"[GPU {device_id}] Selected frames: {selected_frames}")
+            frame_image_paths = sorted(glob(str(tmp_dir / "*.png")))
+            images = load_and_preprocess_images(frame_image_paths).to(device, dtype=dtype)
+            K = min(args.num_frames, images.shape[0])
+            selected_frames = space_aware_frame_sampling(model, images, K, dtype)
+            print(f"[GPU {device_id}] Selected frames: {selected_frames}")
 
-        selected_original_indices = [int(frame_indices[idx]) for idx in selected_frames]
+            selected_original_indices = [int(frame_indices[idx]) for idx in selected_frames]
 
-        # Space-aware sampling
-        if args.sampling_type in ["both", "sa"]:
-            sa_dir = os.path.join(args.output_folder, "sa_sampling", video_name)
-            os.makedirs(sa_dir, exist_ok=True)
-            for orig_idx in selected_original_indices:
-                src_path = tmp_dir / f"frame_{orig_idx:04d}.png"
-                if not src_path.exists():
-                    continue
-                dst_name = f"{video_name}_frame_{orig_idx:06d}.png"
-                dst_path = os.path.join(sa_dir, dst_name)
-                shutil.copy2(src_path, dst_path)
+            # Space-aware sampling
+            if args.sampling_type in ["both", "sa"]:
+                sa_dir = os.path.join(args.output_folder, video_name)
+                os.makedirs(sa_dir, exist_ok=True)
+                for orig_idx in selected_original_indices:
+                    src_path = tmp_dir / f"frame_{orig_idx:04d}.png"
+                    if not src_path.exists():
+                        continue
+                    dst_name = f"{video_name}_frame_{orig_idx:06d}.png"
+                    dst_path = os.path.join(sa_dir, dst_name)
+                    shutil.copy2(src_path, dst_path)
 
-            print(f"[GPU {device_id}] Saved {len(selected_original_indices)} selected frames to {sa_dir}")
+                print(f"[GPU {device_id}] Saved {len(selected_original_indices)} selected frames to {sa_dir}")
 
-            # Save selected frames metadata
-            metadata = {
-                "scene_name": video_name,
-                "selected_frames": selected_original_indices,
-                "num_frames": len(selected_original_indices)
-            }
-            metadata_path = os.path.join(sa_dir, f"selected_frames.json")
-            with open(metadata_path, 'w') as f:
-                json.dump(metadata, f, indent=2)
+                # Save selected frames metadata
+                metadata = {
+                    "scene_name": video_name,
+                    "selected_frames": selected_original_indices,
+                    "num_frames": len(selected_original_indices)
+                }
+                metadata_path = os.path.join(sa_dir, f"selected_frames.json")
+                with open(metadata_path, 'w') as f:
+                    json.dump(metadata, f, indent=2)
 
-            # Create video from space-aware sampled frames if requested
-            if args.save_video:
-                sa_video_path = os.path.join(sa_dir, f"{video_name}_sa_sampling.mp4")
-                create_video_from_frames(sa_dir, sa_video_path, fps=1)
+                # Create video from space-aware sampled frames if requested
+                if args.save_video:
+                    sa_video_path = os.path.join(sa_dir, f"{video_name}_sa_sampling.mp4")
+                    create_video_from_frames(sa_dir, sa_video_path, fps=1)
 
-        # Uniform sampling
-        if args.sampling_type in ["both", "uniform"]:
-            uniform_dir = os.path.join(args.output_folder, "uniform_sampling", video_name)
-            os.makedirs(uniform_dir, exist_ok=True)
-            if len(frame_indices) <= args.num_frames:
-                sampled_indices = frame_indices
-            else:
-                sampled_indices = np.linspace(0, len(frame_indices) - 1, num=args.num_frames, dtype=int)
-                sampled_indices = frame_indices[sampled_indices]
-            for orig_idx in sampled_indices:
-                src_path = tmp_dir / f"frame_{orig_idx:04d}.png"
-                if not src_path.exists():
-                    continue
-                dst_name = f"{video_name}_frame_{orig_idx:06d}.png"
-                dst_path = os.path.join(uniform_dir, dst_name)
-                shutil.copy2(src_path, dst_path)
+            # Uniform sampling
+            if args.sampling_type in ["both", "uniform"]:
+                uniform_dir = os.path.join(args.output_folder, video_name)
+                os.makedirs(uniform_dir, exist_ok=True)
+                if len(frame_indices) <= args.num_frames:
+                    sampled_indices = frame_indices
+                else:
+                    sampled_indices = np.linspace(0, len(frame_indices) - 1, num=args.num_frames, dtype=int)
+                    sampled_indices = frame_indices[sampled_indices]
+                for orig_idx in sampled_indices:
+                    src_path = tmp_dir / f"frame_{orig_idx:04d}.png"
+                    if not src_path.exists():
+                        continue
+                    dst_name = f"{video_name}_frame_{orig_idx:06d}.png"
+                    dst_path = os.path.join(uniform_dir, dst_name)
+                    shutil.copy2(src_path, dst_path)
 
-            print(f"[GPU {device_id}] Saved {len(sampled_indices)} uniform sampled frames to {uniform_dir}")
+                print(f"[GPU {device_id}] Saved {len(sampled_indices)} uniform sampled frames to {uniform_dir}")
 
-            # Create video from uniform sampled frames if requested
-            if args.save_video:
-                uniform_video_path = os.path.join(uniform_dir, f"{video_name}_uniform_sampling.mp4")
-                create_video_from_frames(uniform_dir, uniform_video_path, fps=1)
-
-        shutil.rmtree(tmp_dir)
-        cuda.empty_cache()
+                # Create video from uniform sampled frames if requested
+                if args.save_video:
+                    uniform_video_path = os.path.join(uniform_dir, f"{video_name}_uniform_sampling.mp4")
+                    create_video_from_frames(uniform_dir, uniform_video_path, fps=1)
+        
+        except Exception as e:
+            print(f"[GPU {device_id}] Error processing {video_name}: {e}")
+            raise
+        finally:
+            # Always clean up temporary directory
+            if tmp_dir.exists():
+                shutil.rmtree(tmp_dir)
+            cuda.empty_cache()
+    
+    # Print summary
+    print(f"\n{'='*80}")
+    print(f"[GPU {device_id}] SUMMARY:")
+    print(f"  Total videos: {total_videos}")
+    print(f"  Skipped (already complete): {skipped_videos}")
+    print(f"  Need processing: {process_videos}")
+    print(f"{'='*80}\n")
 
 
 if __name__ == "__main__":
@@ -430,6 +497,9 @@ if __name__ == "__main__":
     parser.add_argument("--save_video", action="store_true", help="Save a video with fps=1 from the sampled frames.")
     parser.add_argument("--sampling_type", type=str, default="both", choices=["both", "sa", "uniform"], 
                         help="Type of sampling to perform: 'both' (default), 'sa' (space-aware only), or 'uniform' (uniform only).")
+    parser.add_argument("--dry_run", action="store_true", help="Dry run mode: only check and report anomalies, no actual processing.")
+    parser.add_argument("--base_data_root", type=str, default="/data/horse/ws/jixu233b-metadata_ws/datasets/vsibench",
+                        help="Base data root directory for single video mode output.")
     args = parser.parse_args()
 
     n_gpu = torch.cuda.device_count()
@@ -445,14 +515,44 @@ if __name__ == "__main__":
     if args.video_path != None:
         assert os.path.exists(args.video_path), f"Video path {args.video_path} does not exist."
         all_videos = [args.video_path]
+        
+        # Isolate single video results under single_video directory
+        single_video_root = os.path.join(args.base_data_root, "single_video")
+        
+        # Extract num_frames from output_folder if it contains pattern like "8f" or "16f"
+        import re
+        frames_match = re.search(r'(\d+)f', args.output_folder)
+        if frames_match:
+            num_frames_str = frames_match.group(0)  # e.g., "8f"
+        else:
+            num_frames_str = f"{args.num_frames}f"
+        
+        # Determine sampling type from output_folder or use args.sampling_type
+        if "sa_sampling" in args.output_folder:
+            sampling_dir = f"sa_sampling_{num_frames_str}"
+        elif "uniform_sampling" in args.output_folder:
+            sampling_dir = f"uniform_sampling_{num_frames_str}"
+        else:
+            sampling_dir = f"{args.sampling_type}_sampling_{num_frames_str}"
+        
+        # Override output_folder to single_video location
+        args.output_folder = os.path.join(single_video_root, sampling_dir)
+        print(f"Single video mode: Output redirected to {args.output_folder}")
     else:
         all_videos = sorted(glob(os.path.join(args.video_folder, "*.mp4")))
+    print('video path', args.video_path, args.video_folder)
     if not all_videos:
         print("No videos found to process.")
         sys.exit(0)
 
     num_gpus = min(len(gpu_ids), len(all_videos))
     video_splits = [list(split) for split in np.array_split(all_videos, num_gpus) if len(split) > 0]
+
+    if args.dry_run:
+        print("\n" + "="*80)
+        print("DRY RUN MODE: Only checking for anomalies")
+        print("No files will be created or modified")
+        print("="*80 + "\n")
 
     processes = []
     for idx, video_subset in enumerate(video_splits):
