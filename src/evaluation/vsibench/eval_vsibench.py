@@ -21,10 +21,12 @@ from src.evaluation.utils.common_utils import (
     chunk_dataset,
     flatten,
     prepare_spatial_mllm_inputs,
+    prepare_spatial_mllm_inputs_with_framesid,
     save_json,
     setup_logging,
 )
 from src.evaluation.vsibench.dataset_utils import MCA_QUESTION_TYPES, NA_QUESTION_TYPES, clean_text, vsi_reward
+
 
 # Constants
 SFT_QUESTION_TEMPLATE = "{Question}"
@@ -36,9 +38,9 @@ SFT_TYPE_TEMPLATE = {
 def load_model_and_processor(model_type: str, model_path: str):
     """Load model and processor based on type."""
     if model_type == "custom-spatial-mllm":
+        # JJ Custom modules
+        from src.custom_qwenvl.model.custom_spatial_mllm import CustomSpatialMLLMConfig, CustomSpatialMLLMForConditionalGeneration
         from transformers import Qwen2_5_VLProcessor
-
-        from src.qwenvl.model.custom_spatial_mllm import CustomSpatialMLLMConfig, CustomSpatialMLLMForConditionalGeneration
 
         config = CustomSpatialMLLMConfig.from_pretrained(model_path)
         model = CustomSpatialMLLMForConditionalGeneration.from_pretrained(
@@ -48,7 +50,7 @@ def load_model_and_processor(model_type: str, model_path: str):
             device_map="cuda",
             attn_implementation="flash_attention_2",
         )
-        processor = Qwen2_5_VLProcessor.from_pretrained(model_path)
+        processor = Qwen2_5_VLProcessor.from_pretrained(model_path, use_fast=True)
         return model, processor
     
     if "spatial-mllm" == model_type:
@@ -64,7 +66,7 @@ def load_model_and_processor(model_type: str, model_path: str):
             device_map="cuda",
             attn_implementation="flash_attention_2",
         )
-        processor = Qwen2_5_VLProcessor.from_pretrained(model_path)
+        processor = Qwen2_5_VLProcessor.from_pretrained(model_path, use_fast=True)
         return model, processor
 
     if "qwen2.5-vl" == model_type:
@@ -76,7 +78,7 @@ def load_model_and_processor(model_type: str, model_path: str):
             device_map="cuda",
             attn_implementation="flash_attention_2",
         )
-        processor = Qwen2_5_VLProcessor.from_pretrained(model_path)
+        processor = Qwen2_5_VLProcessor.from_pretrained(model_path, use_fast=True)
         return model, processor
 
     raise ValueError(f"Unknown model type: {model_type}")
@@ -168,8 +170,13 @@ def prepare_chat_batch(
         padding_side="left",
     )
 
-    if "spatial-mllm" in model_type:
-        batch = prepare_spatial_mllm_inputs(batch, video_inputs, image_inputs, batch_selected_frames)
+    if "spatial-mllm" == model_type:
+        batch = prepare_spatial_mllm_inputs(batch, video_inputs, image_inputs)
+    elif "custom-spatial-mllm" == model_type:
+        # JJ
+        batch = prepare_spatial_mllm_inputs_with_framesid(batch, video_inputs, image_inputs, batch_selected_frames)
+    else:
+        raise ValueError(f"Unknown model type: {model_type}")
 
     return batch, prompts_text_copy
 

@@ -138,6 +138,7 @@ def get_model(model_args, data_args, training_args, attn_implementation="flash_a
         )
         image_processor = AutoProcessor.from_pretrained(
             model_args.pretrained_model_name_or_path,
+            use_fast=True,
         ).image_processor
     else:
         model = Qwen2VLForConditionalGeneration.from_pretrained(
@@ -148,6 +149,7 @@ def get_model(model_args, data_args, training_args, attn_implementation="flash_a
         )
         image_processor = Qwen2VLImageProcessor.from_pretrained(
             model_args.pretrained_model_name_or_path,
+            use_fast=True,
         )
     return model, image_processor
 

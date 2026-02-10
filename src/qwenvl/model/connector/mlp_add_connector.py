@@ -43,7 +43,7 @@ class MLPAddConnector(nn.Module):
             # spatial_embeds: Float[Tensor, "B,S,P,2D"]
             spatial_embeds = spatial_embeds[:, :, patch_start_idx[i]:]
 
-            B, S, P, DD = spatial_embeds.shape #1 16 1569 2048
+            B, S, P, DD = spatial_embeds.shape
             assert B == 1, "batch size should be 1"
 
             # Find corresponding grid_thw rows
@@ -125,8 +125,6 @@ class MLPAddConnector(nn.Module):
         if image_embeds is not None:
             return image_embeds + spatial_embeds
         else:
-            # JJ: FIXME. critical to rm spatial component when conduct PRoPE
-            # return video_embeds #+ spatial_embeds
             return video_embeds + spatial_embeds
 
     def print_trainable_parameters(self) -> None:
