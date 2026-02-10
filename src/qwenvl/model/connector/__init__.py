@@ -15,6 +15,8 @@ def get_connector(config):
             spatial_embeds_layer_idx=config.connector_config["spatial_embeds_layer_idx"],
             visual_temporal_merge_size=config.vision_config.temporal_patch_size,
             visual_spatial_merge_size=config.vision_config.spatial_merge_size,
+            use_visual=config.connector_config.get("use_visual", True),  # JJ: default True
+            use_geo=config.connector_config.get("use_geo", True),  # JJ: default True
         )
     # elif config.connector_config["connector_type"] == "mlp_cat":
     #     return MLPCatConnector(

@@ -7,7 +7,8 @@ from transformers.models.qwen2.modeling_qwen2 import Qwen2RMSNorm
 
 class MLPAddConnector(nn.Module):
     def __init__(
-        self, vggt_dim, language_dim, spatial_embeds_layer_idx, visual_temporal_merge_size, visual_spatial_merge_size
+        self, vggt_dim, language_dim, spatial_embeds_layer_idx, visual_temporal_merge_size, visual_spatial_merge_size,
+        use_visual=True, use_geo=True  # JJ: flags to control fusion
     ) -> None:
         super().__init__()
         self.vggt_dim = vggt_dim
@@ -18,6 +19,11 @@ class MLPAddConnector(nn.Module):
 
         self.visual_temporal_merge_size = visual_temporal_merge_size
         self.visual_spatial_merge_size = visual_spatial_merge_size
+
+        # JJ: flags to control fusion
+        self.use_visual = use_visual
+        self.use_geo = use_geo
+        print(f"[MLPAddConnector] use_visual={self.use_visual}, use_geo={self.use_geo}")
 
         self.merged_dim = (self.vggt_dim * 2) * self.visual_temporal_merge_size * self.visual_spatial_merge_size**2
         self.ln_q = Qwen2RMSNorm(self.merged_dim, eps=1e-6)
@@ -123,9 +129,20 @@ class MLPAddConnector(nn.Module):
         spatial_embeds = self.mlp(spatial_embeds)
 
         if image_embeds is not None:
+            raise 'Should not reach here'
             return image_embeds + spatial_embeds
         else:
-            return video_embeds + spatial_embeds
+            # JJ: control fusion based on flags
+            if self.use_visual and self.use_geo:
+                fused_embeds = video_embeds + spatial_embeds
+            elif self.use_visual:
+                fused_embeds = video_embeds
+            elif self.use_geo:
+                fused_embeds = spatial_embeds
+            else:
+                raise ValueError("At least one of use_visual or use_geo must be True")
+            
+            return fused_embeds, video_embeds, spatial_embeds
 
     def print_trainable_parameters(self) -> None:
         """

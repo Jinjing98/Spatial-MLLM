@@ -1,6 +1,8 @@
+import glob
 import os
 import sys
 import time
+from pathlib import Path
 
 import numpy as np
 import torch
@@ -54,7 +56,7 @@ def prepare_spatial_mllm_inputs(batch, video_inputs, image_inputs):
 
 def load_model_and_processor(model_type: str, model_path: str):
     """Load model and processor based on type."""
-    if "spatial-mllm" in model_type:
+    if "spatial-mllm" == model_type:
         from transformers import Qwen2_5_VLProcessor
 
         from src.qwenvl.model.spatial_mllm import SpatialMLLMConfig, SpatialMLLMForConditionalGeneration
@@ -69,8 +71,23 @@ def load_model_and_processor(model_type: str, model_path: str):
         )
         processor = Qwen2_5_VLProcessor.from_pretrained(model_path, use_fast=True)
         return model, processor
+    elif "custom-spatial-mllm" == model_type:
+        from transformers import Qwen2_5_VLProcessor
 
-    if "qwen2.5-vl" in model_type:
+        from src.qwenvl.model.custom_spatial_mllm import CustomSpatialMLLMConfig, CustomSpatialMLLMForConditionalGeneration
+
+        config = CustomSpatialMLLMConfig.from_pretrained(model_path)
+        model = CustomSpatialMLLMForConditionalGeneration.from_pretrained(
+            model_path,
+            config=config,
+            torch_dtype="bfloat16",
+            device_map="cuda",
+            attn_implementation="flash_attention_2",
+        )
+        processor = Qwen2_5_VLProcessor.from_pretrained(model_path, use_fast=True)
+        return model, processor
+
+    elif "qwen2.5-vl" == model_type:
         from transformers import Qwen2_5_VLForConditionalGeneration, Qwen2_5_VLProcessor
 
         model = Qwen2_5_VLForConditionalGeneration.from_pretrained(
@@ -92,21 +109,40 @@ def main(
     # text: str = "If I am standing by the stove and facing the tv, is the sofa to my front-left, front-right, back-left, or back-right?\nThe directions refer to the quadrants of a Cartesian plane (if I am standing at the origin and facing along the positive y-axis).Options:\nA. back-left\nB. front-right\nC. back-right\nD. front-left\nAnswer with the option's letter from the given choices directly.",  # mca question
     model_type: str = "spatial-mllm",
     model_path: str = "checkpoints/Spatial-MLLM-v1.1-Instruct-135K",
+    mp4_nframes: int = 16,  # JJ: Number of frames to sample from mp4 video
 ):
     torch.cuda.empty_cache()
 
     # load the model
     model, processor = load_model_and_processor(model_type, model_path)
 
+    # JJ: Handle both video file and image folder
+    video_path_obj = Path(video_path)
+    
+    if video_path_obj.is_file():  # Video file (.mp4, etc.)
+        video_content = {
+            "type": "video",
+            "video": video_path,
+            "nframes": mp4_nframes,
+        }
+    elif video_path_obj.is_dir():  # Image folder (pretend as video)
+        image_files = sorted(glob.glob(str(video_path_obj / "*.png")))
+        if not image_files:
+            raise FileNotFoundError(f"No PNG files found in {video_path}")
+        
+        video_content = {
+            "type": "video",
+            "video": image_files,  # List of image paths
+            # Note: Do NOT set nframes for image list
+        }
+    else:
+        raise FileNotFoundError(f"Path not found: {video_path}")
+
     messages = [
         {
             "role": "user",
             "content": [
-                {
-                    "type": "video",
-                    "video": video_path,
-                    "nframes": 16,
-                },
+                video_content,
                 {
                     "type": "text",
                     "text": text,

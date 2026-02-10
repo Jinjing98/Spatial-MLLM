@@ -188,7 +188,8 @@ class CustomSpatialMLLMForConditionalGeneration(Qwen2_5_VLForConditionalGenerati
                 spatial_embeds_list, patch_start_idx = self.spatial_encoder(image_tchw)
 
                 # fuse video and spatial embeddings
-                fused_embeds = self.connector(
+                # JJ
+                fused_embeds, _, _ = self.connector(
                     image_embeds=image_embeds,
                     spatial_embeds_list=spatial_embeds_list,
                     patch_start_idx=patch_start_idx,
@@ -236,7 +237,7 @@ class CustomSpatialMLLMForConditionalGeneration(Qwen2_5_VLForConditionalGenerati
                 # here to reuse qv2.5 vision encoder (merge 2 temporal frame always)
                 # 3d feature from VGGT is also rearraged in a similar manner (which is unnatually)
                 # 'visual_temporal_merge_size' in 2D;
-                fused_embeds = self.connector(
+                fused_embeds, video_embeds_sep, spatial_embeds_sep = self.connector(
                     video_embeds=video_embeds,
                     spatial_embeds_list=spatial_embeds_list,
                     patch_start_idx=patch_start_idx,
