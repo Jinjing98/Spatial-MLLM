@@ -124,7 +124,8 @@ class SpatialMLLMForConditionalGeneration(Qwen2_5_VLForConditionalGeneration):
                 # print("Warning: K and Pose estimation for images not implemented yet (TODO placeholder)")
 
                 # fuse video and spatial embeddings
-                fused_embeds = self.connector(
+                # JJ
+                fused_embeds, _, _ = self.connector(
                     image_embeds=image_embeds,
                     spatial_embeds_list=spatial_embeds_list,
                     patch_start_idx=patch_start_idx,
@@ -157,7 +158,7 @@ class SpatialMLLMForConditionalGeneration(Qwen2_5_VLForConditionalGeneration):
                 spatial_embeds_list, patch_start_idx = self.spatial_encoder(video_tchw, grid_thw=video_grid_thw)
 
                 # fuse video and spatial embeddings
-                fused_embeds = self.connector(
+                fused_embeds, _, _ = self.connector(
                     video_embeds=video_embeds,
                     spatial_embeds_list=spatial_embeds_list,
                     patch_start_idx=patch_start_idx,
