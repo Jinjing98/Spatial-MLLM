@@ -67,6 +67,7 @@ QUESTION_TYPE_LIST=(
     "object_rel_distance"
     "object_size_estimation"
     "room_size_estimation"
+    "route_planning" # missing in previous all
 )
 SCENE_NAME_LIST=()  # By default, empty array means all scenes will be evaluated
 SCENE_NAME_LIST=("42446103")  # By default, empty array means all scenes will be evaluated

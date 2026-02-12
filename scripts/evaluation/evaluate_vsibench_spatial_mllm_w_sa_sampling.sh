@@ -19,14 +19,15 @@ DATA_ROOT="/data/horse/ws/jixu233b-metadata_ws/datasets"
 MODELS_ROOT="/data/horse/ws/jixu233b-metadata_ws/models/Spatial-MLLM"
 RESULTS_SAVE_ROOT="/home/jixu233b/Projects/VLM_3D/SpatialMllmHallucinate/third_party/Spatial-MLLM"
 
-# tso
-DATA_ROOT="/mnt/nct-zfs/TCO-All/SharedDatasets"
-MODELS_ROOT="/mnt/cluster/workspaces/jinjingxu/proj/vlm/SpatialMllmHallucinate/third_party/Spatial-MLLM"
-RESULTS_SAVE_ROOT="/mnt/cluster/workspaces/jinjingxu/proj/vlm/SpatialMllmHallucinate/third_party/Spatial-MLLM"
+# # tso
+# DATA_ROOT="/mnt/nct-zfs/TCO-All/SharedDatasets"
+# MODELS_ROOT="/mnt/cluster/workspaces/jinjingxu/proj/vlm/SpatialMllmHallucinate/third_party/Spatial-MLLM"
+# RESULTS_SAVE_ROOT="/mnt/cluster/workspaces/jinjingxu/proj/vlm/SpatialMllmHallucinate/third_party/Spatial-MLLM"
 
 # activate conda
 source /software/rapids/r24.10/Anaconda3/2024.02-1/etc/profile.d/conda.sh
-conda activate /data/horse/ws/jixu233b-3d_ws/envs/spatial-mllm
+# conda activate /data/horse/ws/jixu233b-3d_ws/envs/spatial-mllm
+conda activate /data/horse/ws/jixu233b-3d_ws/envs/transformers_v5
 module load CUDA/12.4.0 # nvcc
 
 cd "$(dirname "$0")"
@@ -75,11 +76,30 @@ MODEL_NAME_SUFFIX=""
 
 MODEL_TYPE="custom-spatial-mllm"
 MODEL_NAME_SUFFIX="adaptedPosID_RoPE"
+
+MODEL_PATH="${MODELS_ROOT}/checkpoints/Spatial-MLLM-v1.1-Instruct-135K"
+MODEL_TYPE="spatial-mllm"
+# MODEL_TYPE="custom-spatial-mllm"
+# MODEL_TYPE="qwen2.5-vl"
+# MODEL_PATH='Qwen/Qwen2.5-VL-3B-Instruct'
+# MODEL_TYPE="qwen2.5-vl"
+# MODEL_PATH='Qwen/Qwen2.5-VL-3B-Instruct'
+# MODEL_TYPE="spatial-mllm"
+# MODEL_TYPE="custom-spatial-mllm"
+# JJ: Fixed default values (not overridable by env vars)
+# MODEL_TYPE="qwen2.5-vl"
+# MODEL_PATH="Qwen/Qwen2.5-VL-3B-Instruct"
+MODEL_TYPE="qwen3-vl"
+MODEL_PATH="Qwen/Qwen3-VL-2B-Instruct"
+# MODEL_TYPE="spatial-mllm"
+# MODEL_TYPE="custom-spatial-mllm"
+# MODEL_PATH="Diankun/Spatial-MLLM-v1.1-Instruct-135K"
+
 MODEL_NAME="${MODEL_TYPE}${MODEL_NAME_SUFFIX}"
 
 # nframes=(None)
-nframes=(32)
-# nframes=(16)
+# nframes=(32)
+nframes=(16)
 # nframes=(8)
 
 # sample_fps=(None)

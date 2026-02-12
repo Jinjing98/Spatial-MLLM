@@ -1,3 +1,20 @@
+12.02
+#eval qwen3vl with video input for frames num on sa
+sa8 2808207
+sa16 2808218 2804290
+sa32 2804296
+
+#eval qwen3vl with video input for frames num
+f8 2808110
+f16 2804235
+f32 2804225
+
+#Gen sa samples cam pose and other meta
+2803812 f8_both extra
+2803826 f16_both extra
+2806350 f32_both extra
+
+
 Eval Exp: task. room size estimation on all arkit. 150 questions.
 0. spatialmllm sft: default.
 'all': {'micro': 0.5320000018676122, 'macro': 0.5320000018676122}
