@@ -13,93 +13,11 @@ from PIL import Image
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from qwen_vl_utils import process_vision_info
+# JJ: import from common_utils
+from src.evaluation.utils.common_utils import load_model_and_processor, prepare_spatial_mllm_inputs
+from src.evaluation.utils.common_utils import construct_msg_qwen2_5_vl, construct_msg_qwen3_vl
+from src.evaluation.utils.common_utils import elaborate_batch_info_debug
 
-
-def prepare_spatial_mllm_inputs(batch, video_inputs, image_inputs):
-    """
-        Prepare inputs for Spatial MLLM model.
-        Batch: Dict return by the processor
-        video_input and image_inputs is returned by process_vision_info
-        
-        video_inputs: List[torch.Tensor[Int]] | List[torch.Tensor[Float]] | List[List[PIL.Image]]
-        image_inputs: List[PIL.Image]
-    """
-    video_tchw = []
-    image_tchw = []
-
-    if video_inputs:
-        for video_input in video_inputs:
-            if isinstance(video_input, torch.Tensor):
-                video_input = video_input.float() / 255.0  # Normalize to [0, 1]
-            elif isinstance(video_input, list) and all(isinstance(img, Image.Image) for img in video_input):
-                # Convert list of PIL Images to tensor
-                video_input = torch.stack([torch.tensor(np.array(img)).permute(2, 0, 1) for img in video_input]).float() / 255.0
-            else:
-                raise ValueError("Unsupported video input format.")
-            video_tchw.append(video_input)
-    
-    if image_inputs:
-        for image_input in image_inputs:
-            if isinstance(image_input, Image.Image):
-                image_input = torch.tensor(np.array(image_input)).permute(2, 0, 1).float() / 255.0
-            else:
-                raise ValueError("Unsupported image input format.")
-            image_tchw.append(image_input)
-
-    batch.update({
-        "video_tchw": video_tchw if video_tchw else None,
-        "image_tchw": image_tchw if image_tchw else None,
-    })
-
-    return batch
-
-
-def load_model_and_processor(model_type: str, model_path: str):
-    """Load model and processor based on type."""
-    if "spatial-mllm" == model_type:
-        from transformers import Qwen2_5_VLProcessor
-
-        from src.qwenvl.model.spatial_mllm import SpatialMLLMConfig, SpatialMLLMForConditionalGeneration
-
-        config = SpatialMLLMConfig.from_pretrained(model_path)
-        model = SpatialMLLMForConditionalGeneration.from_pretrained(
-            model_path,
-            config=config,
-            torch_dtype="bfloat16",
-            device_map="cuda",
-            attn_implementation="flash_attention_2",
-        )
-        processor = Qwen2_5_VLProcessor.from_pretrained(model_path, use_fast=True)
-        return model, processor
-    elif "custom-spatial-mllm" == model_type:
-        from transformers import Qwen2_5_VLProcessor
-
-        from src.qwenvl.model.custom_spatial_mllm import CustomSpatialMLLMConfig, CustomSpatialMLLMForConditionalGeneration
-
-        config = CustomSpatialMLLMConfig.from_pretrained(model_path)
-        model = CustomSpatialMLLMForConditionalGeneration.from_pretrained(
-            model_path,
-            config=config,
-            torch_dtype="bfloat16",
-            device_map="cuda",
-            attn_implementation="flash_attention_2",
-        )
-        processor = Qwen2_5_VLProcessor.from_pretrained(model_path, use_fast=True)
-        return model, processor
-
-    elif "qwen2.5-vl" == model_type:
-        from transformers import Qwen2_5_VLForConditionalGeneration, Qwen2_5_VLProcessor
-
-        model = Qwen2_5_VLForConditionalGeneration.from_pretrained(
-            model_path,
-            torch_dtype="bfloat16",
-            device_map="cuda",
-            attn_implementation="flash_attention_2",
-        )
-        processor = Qwen2_5_VLProcessor.from_pretrained(model_path, use_fast=True)
-        return model, processor
-
-    raise ValueError(f"Unknown model type: {model_type}")
 
 
 def main(
@@ -109,62 +27,75 @@ def main(
     # text: str = "If I am standing by the stove and facing the tv, is the sofa to my front-left, front-right, back-left, or back-right?\nThe directions refer to the quadrants of a Cartesian plane (if I am standing at the origin and facing along the positive y-axis).Options:\nA. back-left\nB. front-right\nC. back-right\nD. front-left\nAnswer with the option's letter from the given choices directly.",  # mca question
     model_type: str = "spatial-mllm",
     model_path: str = "checkpoints/Spatial-MLLM-v1.1-Instruct-135K",
-    mp4_nframes: int = 16,  # JJ: Number of frames to sample from mp4 video
+    # JJ extend for flexiblity.
+    mp4_nframes: int | None = 16,  # JJ: Number of frames to sample from mp4 video (None to use sample_fps or auto)
+    sample_fps: float | None = None,  # JJ: Sample FPS for video (.mp4 will auto-detect original fps)
+    raw_fps: float | None = None,  # JJ: Original FPS (only for pre-sampled image folders with qwen3-vl)
+    use_visual: bool | None = None,  # JJ: Use visual embeddings (None for model default)
+    use_geo: bool | None = None,  # JJ: Use geo embeddings (None for model default)
 ):
+    print(f"[Inference] model_type={model_type}, mp4_nframes={mp4_nframes}, sample_fps={sample_fps}")
     torch.cuda.empty_cache()
 
     # load the model
-    model, processor = load_model_and_processor(model_type, model_path)
+    # JJ: load model and processor with customized use_visual/use_geo
+    model, processor = load_model_and_processor(model_type, model_path, use_visual=use_visual, use_geo=use_geo)
 
-    # JJ: Handle both video file and image folder
-    video_path_obj = Path(video_path)
-    
-    if video_path_obj.is_file():  # Video file (.mp4, etc.)
-        video_content = {
-            "type": "video",
-            "video": video_path,
-            "nframes": mp4_nframes,
-        }
-    elif video_path_obj.is_dir():  # Image folder (pretend as video)
-        image_files = sorted(glob.glob(str(video_path_obj / "*.png")))
-        if not image_files:
-            raise FileNotFoundError(f"No PNG files found in {video_path}")
-        
-        video_content = {
-            "type": "video",
-            "video": image_files,  # List of image paths
-            # Note: Do NOT set nframes for image list
-        }
+    # JJ: Handle both video file and image folder - use appropriate message constructor
+    if model_type == "qwen3-vl":
+        messages = construct_msg_qwen3_vl(text, video_path, mp4_nframes=mp4_nframes, sample_fps=sample_fps, raw_fps=raw_fps)
     else:
-        raise FileNotFoundError(f"Path not found: {video_path}")
-
-    messages = [
-        {
-            "role": "user",
-            "content": [
-                video_content,
-                {
-                    "type": "text",
-                    "text": text,
-                },
-            ],
-        }
-    ]
-
+        messages = construct_msg_qwen2_5_vl(text, video_path, mp4_nframes=mp4_nframes, sample_fps=sample_fps)
     # Preparation for inference
     prompts_text = processor.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
-    image_inputs, video_inputs = process_vision_info(messages)
-    batch = processor(
-        text=[prompts_text],
-        images=image_inputs if image_inputs else None,
-        videos=video_inputs if video_inputs else None,
-        return_tensors="pt",
-        padding=True,
-        padding_side="left",
-    )
+    # JJ: Extract vision info from messages
+    # For Qwen3-VL, we need to get video metadata from fetch_video
+    if model_type == "qwen3-vl":
+        from qwen_vl_utils import extract_vision_info
+        from src.evaluation.utils.common_utils import gen_videos_metadata
+        
+        vision_infos = extract_vision_info(messages)
+        image_inputs, video_inputs, videos_metadata = gen_videos_metadata(vision_infos)
 
-    if "spatial-mllm" in model_type:
+        batch = processor(
+            text=[prompts_text],
+            images=image_inputs,
+            videos=video_inputs,
+            video_metadata=videos_metadata,
+            do_sample_frames=False,  # JJ: Video already sampled by fetch_video; don't re-sample
+            return_tensors="pt",
+            padding=True,
+            padding_side="left",
+        )
+    else:
+        # For other models, use standard process_vision_info
+        from qwen_vl_utils import process_vision_info
+        image_inputs, video_inputs = process_vision_info(messages)
+        batch = processor(
+            text=[prompts_text],
+            images=image_inputs if image_inputs else None,
+            videos=video_inputs if video_inputs else None,
+            return_tensors="pt",
+            padding=True,
+            padding_side="left",
+        )
+
+    # JJ: elaborate the batch info for debug
+    elaborate_batch_info_debug(processor, batch)
+
+    # JJ elaborate the update
+    if model_type in ["spatial-mllm"]:
         batch = prepare_spatial_mllm_inputs(batch, video_inputs, image_inputs)
+    elif model_type in ["custom-spatial-mllm"]:
+        raise NotImplementedError("Custom Spatial MLLM is not implemented yet.")
+        batch = prepare_spatial_mllm_inputs(batch, video_inputs, image_inputs)
+    elif model_type in ["qwen2.5-vl"]:
+        pass # Remain as it is
+    elif model_type in ["qwen3-vl"]:
+        pass # Remain as it is
+        # raise NotImplementedError("Qwen3 VL is not implemented yet.")
+    else:
+        raise ValueError(f"Invalid model type: {model_type}")
 
     batch.to(model.device)
     if "image_tchw" in batch and batch["image_tchw"] is not None:

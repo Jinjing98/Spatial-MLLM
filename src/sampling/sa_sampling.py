@@ -113,6 +113,29 @@ def maximum_coverage_sampling(voxel_sets, K):
     
     return selected
 
+# JJ : Run VGGT inference and return predictions dict with extrinsic/intrinsic
+def run_vggt_inference(vggt, images, dtype):
+    """
+    Run VGGT model inference and compute extrinsic/intrinsic matrices.
+
+    Args:
+        vggt: Pretrained VGGT model.
+        images: Tensor of shape (T, 3, H, W) representing the video frames.
+        dtype: Data type for mixed precision inference.
+    Returns:
+        dict: Predictions dict with all VGGT outputs plus extrinsic/intrinsic.
+    """
+    with torch.no_grad():
+        with torch.amp.autocast(device_type="cuda", dtype=dtype):
+            predictions = vggt(images)
+
+    print("Converting pose encoding to extrinsic and intrinsic matrices...")
+    extrinsic, intrinsic = pose_encoding_to_extri_intri(predictions["pose_enc"], images.shape[-2:])
+    predictions["extrinsic"] = extrinsic
+    predictions["intrinsic"] = intrinsic
+    return predictions
+
+
 def space_aware_frame_sampling(vggt, images, K, dtype):
     """
     Perform space-aware frame sampling on a video tensor.
@@ -124,17 +147,9 @@ def space_aware_frame_sampling(vggt, images, K, dtype):
     Returns:
         List[int]: Indices of selected frames.
     """
-    with torch.no_grad():
-        with torch.amp.autocast(device_type="cuda", dtype=dtype):
-            # Predict attributes including cameras, depth maps, and point maps.
-            predictions = vggt(images)
+    # JJ : Reuse run_vggt_inference helper
+    predictions = run_vggt_inference(vggt, images, dtype)
 
-    print("Converting pose encoding to extrinsic and intrinsic matrices...")
-    extrinsic, intrinsic = pose_encoding_to_extri_intri(predictions["pose_enc"], images.shape[-2:]) #w2c format, JJ confirmed in VGGT source code.
-    predictions["extrinsic"] = extrinsic
-    predictions["intrinsic"] = intrinsic
-
-    print(predictions['world_points'].shape)
 
     world_points = predictions['world_points']  # shape (1, T, H, W, 3)
     world_points_flat = world_points.reshape(-1, 3)  # shape (B, 3)
@@ -148,10 +163,10 @@ def space_aware_frame_sampling(vggt, images, K, dtype):
     # get bounding box of world_points
     x_min, y_min, z_min = world_points_flat[world_points_conf_flat_mask].min(dim=0)[0]
     x_max, y_max, z_max = world_points_flat[world_points_conf_flat_mask].max(dim=0)[0]
-    print(x_min, y_min, z_min, x_max, y_max, z_max)
+    # print(x_min, y_min, z_min, x_max, y_max, z_max)
 
     voxel_size = min(x_max - x_min, y_max - y_min, z_max - z_min) / 20
-    print(voxel_size)
+    # print(voxel_size)
 
     voxel_sets = compute_voxel_sets(
         world_points=world_points,
@@ -164,7 +179,7 @@ def space_aware_frame_sampling(vggt, images, K, dtype):
 
     selected_frames = sorted(maximum_coverage_sampling(voxel_sets, K))
 
-    return selected_frames
+    return selected_frames, predictions
 
 
 def load_and_preprocess_images(image_path_list):
@@ -305,10 +320,11 @@ def process_videos_on_device(device_id, video_paths, args):
             except Exception as e:
                 print(f"[GPU {device_id}] Warning: Could not remove {stale_dir}: {e}")
 
-    # Skip model loading in dry run mode
-    if not args.dry_run:
-        device = "cuda"
-        dtype = torch.bfloat16
+    # JJ : Skip model loading in dry run mode or uniform-only sampling (unless save_extra needs VGGT)
+    device = "cuda"
+    dtype = torch.bfloat16
+    need_vggt = args.sampling_type in ["both", "sa"] or args.save_extra
+    if not args.dry_run and need_vggt:
         model = VGGT.from_pretrained(args.model_path).to(device)
     else:
         model = None
@@ -354,6 +370,11 @@ def process_videos_on_device(device_id, video_paths, args):
                 elif not metadata_valid:
                     anomalies.append(f"SA: metadata invalid")
                     skip_video = False
+                
+                # JJ : Check SA predictions .pt when save_extra is enabled
+                if args.save_extra and not os.path.exists(os.path.join(sa_dir, "sa_predictions.pt")):
+                    anomalies.append(f"SA: predictions.pt missing")
+                    skip_video = False
             else:
                 anomalies.append(f"SA: dir not found")
                 skip_video = False
@@ -369,6 +390,11 @@ def process_videos_on_device(device_id, video_paths, args):
                 if png_count != args.num_frames:
                     anomalies.append(f"Uniform: PNG count {png_count}/{args.num_frames}")
                     skip_video = False
+                
+                # JJ : Check uniform predictions .pt when save_extra is enabled
+                if args.save_extra and not os.path.exists(os.path.join(uniform_dir, "uniform_predictions.pt")):
+                    anomalies.append(f"Uniform: predictions.pt missing")
+                    skip_video = False
             else:
                 anomalies.append(f"Uniform: dir not found")
                 skip_video = False
@@ -376,7 +402,7 @@ def process_videos_on_device(device_id, video_paths, args):
         if skip_video:
             skipped_videos += 1
             # print(f"[GPU {device_id}] ✓ SKIP: {video_name}")
-            continue
+            continue # JJ: comment out to overwrite
         else:
             process_videos += 1
             print(f"[GPU {device_id}] ✗ PROCESS: {video_name} - {', '.join(anomalies)}")
@@ -408,16 +434,18 @@ def process_videos_on_device(device_id, video_paths, args):
 
             print(f"[GPU {device_id}] Saved {len(frame_indices)} frames to {tmp_dir}")
 
-            frame_image_paths = sorted(glob(str(tmp_dir / "*.png")))
-            images = load_and_preprocess_images(frame_image_paths).to(device, dtype=dtype)
-            K = min(args.num_frames, images.shape[0])
-            selected_frames = space_aware_frame_sampling(model, images, K, dtype)
-            print(f"[GPU {device_id}] Selected frames: {selected_frames}")
 
-            selected_original_indices = [int(frame_indices[idx]) for idx in selected_frames]
-
+            # JJ : Only run SA inference when needed
             # Space-aware sampling
             if args.sampling_type in ["both", "sa"]:
+                frame_image_paths = sorted(glob(str(tmp_dir / "*.png")))
+                images = load_and_preprocess_images(frame_image_paths).to(device, dtype=dtype)
+                K = min(args.num_frames, images.shape[0])
+                selected_frames, predictions = space_aware_frame_sampling(model, images, K, dtype)
+                print(f"[GPU {device_id}] Selected frames: {selected_frames}")
+
+                selected_original_indices = [int(frame_indices[idx]) for idx in selected_frames]
+
                 sa_dir = os.path.join(args.output_folder, video_name)
                 os.makedirs(sa_dir, exist_ok=True)
                 for orig_idx in selected_original_indices:
@@ -431,14 +459,23 @@ def process_videos_on_device(device_id, video_paths, args):
                 print(f"[GPU {device_id}] Saved {len(selected_original_indices)} selected frames to {sa_dir}")
 
                 # Save selected frames metadata
+                # JJ : Also save prediction tensor indices for mapping back to predictions dict
                 metadata = {
                     "scene_name": video_name,
                     "selected_frames": selected_original_indices,
+                    "selected_prediction_indices": [int(idx) for idx in selected_frames],
                     "num_frames": len(selected_original_indices)
                 }
                 metadata_path = os.path.join(sa_dir, f"selected_frames.json")
                 with open(metadata_path, 'w') as f:
                     json.dump(metadata, f, indent=2)
+
+                # JJ : Save filtered predictions dict as .pt when save_extra is enabled (SA mode)
+                if args.save_extra:
+                    sa_predictions_filtered = {k: predictions[k] for k in args.extra_list if k in predictions}
+                    sa_predictions_path = os.path.join(sa_dir, f"sa_predictions.pt")
+                    torch.save(sa_predictions_filtered, sa_predictions_path)
+                    print(f"[GPU {device_id}] Saved SA predictions ({list(sa_predictions_filtered.keys())}) to {sa_predictions_path}")
 
                 # Create video from space-aware sampled frames if requested
                 if args.save_video:
@@ -463,6 +500,16 @@ def process_videos_on_device(device_id, video_paths, args):
                     shutil.copy2(src_path, dst_path)
 
                 print(f"[GPU {device_id}] Saved {len(sampled_indices)} uniform sampled frames to {uniform_dir}")
+
+                # JJ : Run VGGT inference on uniform frames and save filtered predictions when save_extra
+                if args.save_extra:
+                    uniform_frame_paths = sorted(glob(os.path.join(uniform_dir, "*.png")))
+                    uniform_images = load_and_preprocess_images(uniform_frame_paths).to(device, dtype=dtype)
+                    uniform_predictions = run_vggt_inference(model, uniform_images, dtype)
+                    uniform_predictions_filtered = {k: uniform_predictions[k] for k in args.extra_list if k in uniform_predictions}
+                    uniform_predictions_path = os.path.join(uniform_dir, f"uniform_predictions.pt")
+                    torch.save(uniform_predictions_filtered, uniform_predictions_path)
+                    print(f"[GPU {device_id}] Saved uniform predictions ({list(uniform_predictions_filtered.keys())}) to {uniform_predictions_path}")
 
                 # Create video from uniform sampled frames if requested
                 if args.save_video:
@@ -497,9 +544,12 @@ if __name__ == "__main__":
     parser.add_argument("--save_video", action="store_true", help="Save a video with fps=1 from the sampled frames.")
     parser.add_argument("--sampling_type", type=str, default="both", choices=["both", "sa", "uniform"], 
                         help="Type of sampling to perform: 'both' (default), 'sa' (space-aware only), or 'uniform' (uniform only).")
+    parser.add_argument("--save_extra", action="store_true", help="Save VGGT predictions dict as .pt alongside sampled frames.")
+    # JJ : Specify which prediction keys to save
+    parser.add_argument("--extra_list", type=str, nargs="+",
+                        default=["depth", "depth_conf", "world_points", "world_points_conf", "extrinsic", "intrinsic"],
+                        help="List of prediction keys to save when --save_extra is enabled.")
     parser.add_argument("--dry_run", action="store_true", help="Dry run mode: only check and report anomalies, no actual processing.")
-    parser.add_argument("--base_data_root", type=str, default="/data/horse/ws/jixu233b-metadata_ws/datasets/vsibench",
-                        help="Base data root directory for single video mode output.")
     args = parser.parse_args()
 
     n_gpu = torch.cuda.device_count()
@@ -515,10 +565,7 @@ if __name__ == "__main__":
     if args.video_path != None:
         assert os.path.exists(args.video_path), f"Video path {args.video_path} does not exist."
         all_videos = [args.video_path]
-        
-        # Isolate single video results under single_video directory
-        single_video_root = os.path.join(args.base_data_root, "single_video")
-        
+                
         # Extract num_frames from output_folder if it contains pattern like "8f" or "16f"
         import re
         frames_match = re.search(r'(\d+)f', args.output_folder)
@@ -534,9 +581,11 @@ if __name__ == "__main__":
             sampling_dir = f"uniform_sampling_{num_frames_str}"
         else:
             sampling_dir = f"{args.sampling_type}_sampling_{num_frames_str}"
-        
-        # Override output_folder to single_video location
-        args.output_folder = os.path.join(single_video_root, sampling_dir)
+
+        # udpate the single video output folder
+        dir_sampling_dir, dataset_name = os.path.dirname(args.output_folder), os.path.basename(args.output_folder)
+        dir_sampling_dir_updated = os.path.join(os.path.dirname(dir_sampling_dir), sampling_dir+'_single_video')
+        args.output_folder = os.path.join(dir_sampling_dir_updated, dataset_name)
         print(f"Single video mode: Output redirected to {args.output_folder}")
     else:
         all_videos = sorted(glob(os.path.join(args.video_folder, "*.mp4")))

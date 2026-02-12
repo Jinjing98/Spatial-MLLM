@@ -161,6 +161,7 @@ class CustomSpatialMLLMForConditionalGeneration(Qwen2_5_VLForConditionalGenerati
         if inputs_embeds is None:
             inputs_embeds = self.model.embed_tokens(input_ids)
             if pixel_values is not None: # will not run through here 
+                assert False, 'Should not reach here...'
                 assert image_tchw is not None, "`image_tchw` must be provided when `pixel_values` is not None."
                 pixel_values = pixel_values.type(self.visual.dtype)
                 image_tchw = [image_tchw_i.type(self.visual.dtype) for image_tchw_i in image_tchw]
@@ -178,7 +179,7 @@ class CustomSpatialMLLMForConditionalGeneration(Qwen2_5_VLForConditionalGenerati
                 spatial_embeds_list, patch_start_idx = self.spatial_encoder(image_tchw)
 
                 # fuse video and spatial embeddings
-                fused_embeds = self.connector(
+                fused_embeds,_, _ = self.connector(
                     image_embeds=image_embeds,
                     spatial_embeds_list=spatial_embeds_list,
                     patch_start_idx=patch_start_idx,
@@ -217,7 +218,8 @@ class CustomSpatialMLLMForConditionalGeneration(Qwen2_5_VLForConditionalGenerati
                 # Reuse qv2.5 vision encoder (merge 2 temporal frame via tublar)
                 # 3d feature from VGGT (visual_temporal_merge_size) is also rearraged below with 2 tem frames as one.
                 # TODO: adjust fusion; effectiveness of fusion
-                fused_embeds = self.connector(
+                # fused_embeds = self.connector(
+                fused_embeds, _, _ = self.connector(
                     video_embeds=video_embeds,
                     spatial_embeds_list=spatial_embeds_list,
                     patch_start_idx=patch_start_idx,

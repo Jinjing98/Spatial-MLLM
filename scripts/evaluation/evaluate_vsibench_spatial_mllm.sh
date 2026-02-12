@@ -15,10 +15,13 @@
 # Global
 DATA_ROOT="/data/horse/ws/jixu233b-metadata_ws/datasets"
 MODELS_ROOT="/data/horse/ws/jixu233b-metadata_ws/models/Spatial-MLLM"
+RESULTS_SAVE_ROOT="/home/jixu233b/Projects/VLM_3D/SpatialMllmHallucinate/third_party/Spatial-MLLM"
 
 # tso
 DATA_ROOT="/mnt/nct-zfs/TCO-All/SharedDatasets"
 MODELS_ROOT="/mnt/cluster/workspaces/jinjingxu/proj/vlm/SpatialMllmHallucinate/third_party/Spatial-MLLM"
+RESULTS_SAVE_ROOT="/mnt/cluster/workspaces/jinjingxu/proj/vlm/SpatialMllmHallucinate/third_party/Spatial-MLLM"
+
 
 # activate conda
 # source /software/rapids/r24.10/Anaconda3/2024.02-1/etc/profile.d/conda.sh
@@ -35,7 +38,7 @@ mkdir -p $TRITON_CACHE_DIR
 # Print current directory
 pwd
 
-OUTPUT_ROOT="results/vsibench"
+OUTPUT_ROOT="${RESULTS_SAVE_ROOT}/results/vsibench"
 mkdir -p "$OUTPUT_ROOT"
 
 MODEL_PATH="${MODELS_ROOT}/checkpoints/Spatial-MLLM-v1.1-Instruct-135K"
@@ -66,7 +69,7 @@ QUESTION_TYPE_LIST=(
     "room_size_estimation"
 )
 SCENE_NAME_LIST=()  # By default, empty array means all scenes will be evaluated
-# SCENE_NAME_LIST=("42446103")  # By default, empty array means all scenes will be evaluated
+SCENE_NAME_LIST=("42446103")  # By default, empty array means all scenes will be evaluated
 
 # QUESTION_TYPES=("${QUESTION_TYPE_LIST[3]}" "${QUESTION_TYPE_LIST[4]}" "${QUESTION_TYPE_LIST[5]}") #ego. 
 # QUESTION_TYPES=("${QUESTION_TYPE_LIST[0]}" "${QUESTION_TYPE_LIST[1]}" "${QUESTION_TYPE_LIST[6]}") #allo.
@@ -74,10 +77,13 @@ SCENE_NAME_LIST=()  # By default, empty array means all scenes will be evaluated
 DATASETS=("${DATASET_LIST[0]}") #arkitscenes
 # DATASETS=("${DATASET_LIST[@]}") #all datasets
 # QUESTION_TYPES=("${QUESTION_TYPE_LIST[8]}") #semantic
-QUESTION_TYPES=("${QUESTION_TYPE_LIST[@]}") #all cases
-# QUESTION_TYPES=("${QUESTION_TYPE_LIST[6]}") #allo.
+# QUESTION_TYPES=("${QUESTION_TYPE_LIST[@]}") #all cases
+QUESTION_TYPES=("${QUESTION_TYPE_LIST[6]}") #allo.
 
+nframes=(None)
 nframes=(16)
+# sample_fps=(None)
+# sample_fps=(1)
 
 for nframe in "${nframes[@]}"; do
     TIMESTAMP=$(date +"%Y%m%d_%H%M%S")
@@ -115,5 +121,7 @@ for nframe in "${nframes[@]}"; do
         ${SCENE_NAME_LIST[@]:+--scene_names ${SCENE_NAME_LIST[@]}} \
         2>&1 | tee -a "$LOG_FILE"
         
+        # --sample_fps 0.01 \
+
     echo ">>> Experiment Finished. Results in $EXP_DIR"
 done

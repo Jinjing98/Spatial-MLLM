@@ -1,14 +1,37 @@
 #!/bin/bash
+
+#SBATCH --nodes=1
+#SBATCH --ntasks=1 #2
+#SBATCH --gres=gpu:1           # use 1 GPU per node (i.e. use one GPU per task)
+#SBATCH --gpus-per-task=1
+#SBATCH --time=15:00:00
+#SBATCH --mem=80G
+#SBATCH --partition=capella
+#SBATCH --mail-user=xvjinjing8@gmail.com
+#SBATCH --mail-type=BEGIN,END,FAIL,REQUEUE,TIME_LIMIT_90
+#SBATCH --error=/data/horse/ws/jixu233b-metadata_ws/hpc_out/%j.err
+#SBATCH --output=/data/horse/ws/jixu233b-metadata_ws/hpc_out/%j.out
+
+# test on capella
+
 # Global
 DATA_ROOT="/data/horse/ws/jixu233b-metadata_ws/datasets"
 MODELS_ROOT="/data/horse/ws/jixu233b-metadata_ws/models/Spatial-MLLM"
+RESULTS_SAVE_ROOT="/home/jixu233b/Projects/VLM_3D/SpatialMllmHallucinate/third_party/Spatial-MLLM"
 
 # tso
 DATA_ROOT="/mnt/nct-zfs/TCO-All/SharedDatasets"
 MODELS_ROOT="/mnt/cluster/workspaces/jinjingxu/proj/vlm/SpatialMllmHallucinate/third_party/Spatial-MLLM"
+RESULTS_SAVE_ROOT="/mnt/cluster/workspaces/jinjingxu/proj/vlm/SpatialMllmHallucinate/third_party/Spatial-MLLM"
+
+# activate conda
+source /software/rapids/r24.10/Anaconda3/2024.02-1/etc/profile.d/conda.sh
+conda activate /data/horse/ws/jixu233b-3d_ws/envs/spatial-mllm
+module load CUDA/12.4.0 # nvcc
 
 cd "$(dirname "$0")"
 cd ../..
+cd "$SLURM_SUBMIT_DIR"
 
 # This avoids NFS slowdowns.
 export TRITON_CACHE_DIR=/tmp/triton_cache_${USER}
@@ -16,14 +39,13 @@ mkdir -p $TRITON_CACHE_DIR
 
 # Print current directory
 pwd
-OUTPUT_ROOT="results/vsibench-sa-sampling"
+
+# Use absolute path for output to avoid permission issues
+OUTPUT_ROOT="${RESULTS_SAVE_ROOT}/results/vsibench-sa-sampling"
 mkdir -p "$OUTPUT_ROOT"
 
-
-MODEL_PATH="${MODELS_ROOT}/checkpoints/Spatial-MLLM-v1.1-Instruct-135K"
-MODEL_NAME=$(echo "$MODEL_PATH" | cut -d'/' -f2)
-MODEL_TYPE="spatial-mllm"
-MODEL_TYPE="custom-spatial-mllm"
+# OUTPUT_ROOT="results/vsibench"
+# mkdir -p "$OUTPUT_ROOT"
 
 
 DATASET_LIST=(
@@ -42,24 +64,59 @@ QUESTION_TYPE_LIST=(
     "object_rel_distance"
     "object_size_estimation"
     "room_size_estimation"
+    "route_planning" # missing in previous all
 )
-SCENE_NAME_LIST=()  # By default, empty array means all scenes will be evaluated
-# SCENE_NAME_LIST=("42446103")  # By default, empty array means all scenes will be evaluated
+
+MODEL_PATH="${MODELS_ROOT}/checkpoints/Spatial-MLLM-v1.1-Instruct-135K"
+# MODEL_NAME=$(echo "$MODEL_PATH" | cut -d'/' -f2)
+# MODEL_NAME=$(echo "$MODEL_PATH" | cut -d'/' -f9)
+MODEL_TYPE="spatial-mllm"
+MODEL_NAME_SUFFIX=""
+
+MODEL_TYPE="custom-spatial-mllm"
+MODEL_NAME_SUFFIX="adaptedPosID_RoPE"
+MODEL_NAME="${MODEL_TYPE}${MODEL_NAME_SUFFIX}"
+
+# nframes=(None)
+nframes=(32)
+# nframes=(16)
+# nframes=(8)
+
+# sample_fps=(None)
+# sample_fps=(1)
 
 # QUESTION_TYPES=("${QUESTION_TYPE_LIST[3]}" "${QUESTION_TYPE_LIST[4]}" "${QUESTION_TYPE_LIST[5]}") #ego. 
 # QUESTION_TYPES=("${QUESTION_TYPE_LIST[0]}" "${QUESTION_TYPE_LIST[1]}" "${QUESTION_TYPE_LIST[6]}") #allo.
 
-DATASETS=("${DATASET_LIST[0]}") #arkitscenes
-# DATASETS=("${DATASET_LIST[@]}") #all datasets
-# QUESTION_TYPES=("${QUESTION_TYPE_LIST[8]}") #semantic
-QUESTION_TYPES=("${QUESTION_TYPE_LIST[@]}") #all cases
+DATASETS=("${DATASET_LIST[@]}") #all datasets
 # QUESTION_TYPES=("${QUESTION_TYPE_LIST[6]}") #allo.
+# DATASETS=("${DATASET_LIST[1]}") #arkitscenes
+# DATASETS=("${DATASET_LIST[2]}") #arkitscenes
+# DATASETS=("${DATASET_LIST[0]}") #arkitscenes
+QUESTION_TYPES=("${QUESTION_TYPE_LIST[@]}") #all cases
+# QUESTION_TYPES=("${QUESTION_TYPE_LIST[6]}") #all cases
 
-nframes=(16)
+SCENE_NAME_LIST=()  # By default, empty array means all scenes will be evaluated
+# SCENE_NAME_LIST=("42446103")  # Example: specify particular scenes to evaluate
+
+
 
 for nframe in "${nframes[@]}"; do
     TIMESTAMP=$(date +"%Y%m%d_%H%M%S")
-    EXP_DIR="${OUTPUT_ROOT}/${MODEL_NAME}-${nframe}f"
+    
+    # Build dataset suffix
+    DATASET_SUFFIX=""
+    if [ ${#DATASETS[@]} -ne ${#DATASET_LIST[@]} ]; then
+        DATASET_SUFFIX="_$(IFS=_; echo "${DATASETS[*]}")"
+    fi
+    
+    # Build question type suffix
+    QUESTION_SUFFIX=""
+    if [ ${#QUESTION_TYPES[@]} -ne ${#QUESTION_TYPE_LIST[@]} ]; then
+        QUESTION_SUFFIX="_$(IFS=_; echo "${QUESTION_TYPES[*]}")"
+    fi
+    
+    EXP_DIR="${OUTPUT_ROOT}/${MODEL_NAME}-${nframe}f${DATASET_SUFFIX}${QUESTION_SUFFIX}"
     LOG_FILE="${EXP_DIR}/run.log"
 
     mkdir -p "$EXP_DIR"
@@ -78,19 +135,24 @@ for nframe in "${nframes[@]}"; do
     } > "$LOG_FILE"
 
     # --- run experiment ---
-    python src/evaluation/vsibench/eval_vsibench.py \
+    EXTRA_ARGS=""
+    if [ ${#SCENE_NAME_LIST[@]} -gt 0 ]; then
+        EXTRA_ARGS="--scene_names ${SCENE_NAME_LIST[@]}"
+    fi
+    
+    python /home/jixu233b/Projects/VLM_3D/SpatialMllmHallucinate/third_party/Spatial-MLLM/src/evaluation/vsibench/eval_vsibench.py \
         --model_path $MODEL_PATH \
         --model_type $MODEL_TYPE \
         --nframes $nframe \
         --annotation_dir "${DATA_ROOT}/vsibench" \
         --question_types ${QUESTION_TYPES[@]} \
         --datasets ${DATASETS[@]} \
-        --video_dir "${DATA_ROOT}/vsibench/sa_sampling_16f" \
+        --video_dir "${DATA_ROOT}/vsibench/sa_sampling_${nframe}f" \
         --batch_size 1 \
         --output_dir "$EXP_DIR" \
         --output_name "eval_result" \
-        ${SCENE_NAME_LIST[@]:+--scene_names ${SCENE_NAME_LIST[@]}} \
+        $EXTRA_ARGS \
         2>&1 | tee -a "$LOG_FILE"
         
-    echo ">>> Experiment [$tag] Finished. Results in $EXP_DIR"
+    echo ">>> Experiment Finished. Results in $EXP_DIR"
 done

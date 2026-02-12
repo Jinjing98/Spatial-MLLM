@@ -22,55 +22,40 @@ from src.evaluation.utils.common_utils import (
 )
 
 
-def load_model_and_processor(model_type: str, model_path: str):
-    """Load model and processor based on type."""
-    if "spatial-mllm" in model_type:
-        from transformers import Qwen2_5_VLProcessor
-
-        from src.qwenvl.model.spatial_mllm import SpatialMLLMConfig, SpatialMLLMForConditionalGeneration
-
-        config = SpatialMLLMConfig.from_pretrained(model_path)
-        model = SpatialMLLMForConditionalGeneration.from_pretrained(
-            model_path,
-            config=config,
-            torch_dtype="bfloat16",
-            device_map="cuda",
-            attn_implementation="flash_attention_2",
-        )
-        processor = Qwen2_5_VLProcessor.from_pretrained(model_path)
-        return model, processor
-
-    if "qwen2.5-vl" in model_type:
-        from transformers import Qwen2_5_VLForConditionalGeneration, Qwen2_5_VLProcessor
-
-        model = Qwen2_5_VLForConditionalGeneration.from_pretrained(
-            model_path,
-            torch_dtype="bfloat16",
-            device_map="cuda",
-            attn_implementation="flash_attention_2",
-        )
-        processor = Qwen2_5_VLProcessor.from_pretrained(model_path)
-        return model, processor
-
-    raise ValueError(f"Unknown model type: {model_type}")
+# JJ: import from common_utils
+from src.evaluation.utils.common_utils import load_model_and_processor
 
 
-def build_user_message(item: Dict, annotation_dir: Path, video_folder: Path, video_nframes: int) -> Dict:
+def build_user_message(item: Dict, annotation_dir: Path, video_folder: Path, video_nframes: int, sample_fps: float = None) -> Dict:
     """Create the chat-style message payload for a single sample."""
     # build question
     video_file_name = item["video"].split("/")[-1] + ".mp4"
     video_file_path = video_folder / video_file_name
 
+    video_content = {
+        "type": "video",
+        "video": str(video_file_path),
+        "resized_height": 480,
+        "resized_width": 640,
+    }
+    
+    # JJ: Sanity check - nframes and sample_fps should not both be provided
+    assert (video_nframes is None) or (sample_fps is None), \
+        f"Cannot specify both nframes ({video_nframes}) and sample_fps ({sample_fps}). Use one or the other."
+    
+    # JJ: Set do_sample_frames if neither is provided
+    video_content["do_sample_frames"] = (video_nframes is None) and (sample_fps is None)
+    
+    # JJ: Set nframes or fps if provided
+    if video_nframes is not None:
+        video_content["nframes"] = video_nframes
+    if sample_fps is not None:
+        video_content["fps"] = sample_fps
+
     return {
         "role": "user",
         "content": [
-            {
-                "type": "video",
-                "video": str(video_file_path),
-                "nframes": video_nframes,
-                "resized_height": 480,
-                "resized_width": 640,
-            },
+            video_content,
             {"type": "text", "text": item["conversations"][0]["value"]},
         ],
     }
@@ -83,9 +68,10 @@ def prepare_chat_batch(
     annotation_dir: Path,
     video_folder: Path,
     video_nframes: int,
+    sample_fps: float = None,
 ) -> Tuple[Dict, List[str]]:
     """Prepare batch for inference: build prompts, process video, and tokenize."""
-    batch_messages = [[build_user_message(item, annotation_dir, video_folder, video_nframes)] for item in batch_data]
+    batch_messages = [[build_user_message(item, annotation_dir, video_folder, video_nframes, sample_fps)] for item in batch_data]
     prompts_text = [
         processor.apply_chat_template(example, tokenize=False, add_generation_prompt=True) for example in batch_messages
     ]
@@ -168,16 +154,17 @@ def postprocess_batch(batch_data: List[Dict], batch_output_text: List[str], prom
 
 
 def evaluate_scanqa_sqa3d(
-    data_chunk, model_type, model_path, batch_size, annotation_path, video_folder, output_path, video_nframes
+    data_chunk, model_type, model_path, batch_size, annotation_path, video_folder, output_path, video_nframes, sample_fps=None, use_visual=None, use_geo=None
 ):
     setup_logging()
-    model, processor = load_model_and_processor(model_type, model_path)
+    # JJ: load model and processor with customized use_visual/use_geo
+    model, processor = load_model_and_processor(model_type, model_path, use_visual=use_visual, use_geo=use_geo)
     final_output = []
 
     for i in tqdm(range(0, len(data_chunk), batch_size), desc="Evaluating ScanQA/SQA3D"):
         batch_data = data_chunk[i : i + batch_size]
         batch_llm_inputs, prompts_text = prepare_chat_batch(
-            batch_data, processor, model_type, annotation_path, video_folder, video_nframes
+            batch_data, processor, model_type, annotation_path, video_folder, video_nframes, sample_fps
         )
         batch_output_text = inference_batch(batch_llm_inputs, model, processor)
         batch_results = postprocess_batch(batch_data, batch_output_text, prompts_text)
@@ -191,12 +178,12 @@ def evaluate_scanqa_sqa3d(
 
 
 def run_worker(
-    gpu_id, data_chunk, model_type, model_path, batch_size, annotation_path, video_folder, output_path, video_nframes
+    gpu_id, data_chunk, model_type, model_path, batch_size, annotation_path, video_folder, output_path, video_nframes, sample_fps=None, use_visual=None, use_geo=None
 ):
     """Worker function to run evaluation on a specific GPU."""
     os.environ["CUDA_VISIBLE_DEVICES"] = str(gpu_id)
     evaluate_scanqa_sqa3d(
-        data_chunk, model_type, model_path, batch_size, annotation_path, video_folder, output_path, video_nframes
+        data_chunk, model_type, model_path, batch_size, annotation_path, video_folder, output_path, video_nframes, sample_fps, use_visual, use_geo
     )
 
 
@@ -253,6 +240,9 @@ def main(args):
                 video_folder,
                 output_path_gpu,
                 args.nframes,
+                args.sample_fps,
+                args.use_visual,
+                args.use_geo,
             ),
         )
         p.start()
@@ -277,10 +267,15 @@ def main(args):
 
 
 if __name__ == "__main__":
+    def int_or_none(x):
+        if x.lower() == "none":
+            return None
+        return int(x)
+
     parser = argparse.ArgumentParser(description="Evaluate model on VSIBench dataset.")
     parser.add_argument("--model_path", type=str, required=True, help="Path to the model.")
     parser.add_argument("--model_type", type=str, default="spatial-mllm", help="Type of the model.")
-    parser.add_argument("--nframes", type=int, default=32, help="Number of frames to sample from each video.")
+    # parser.add_argument("--nframes", type=int, default=32, help="Number of frames to sample from each video.")
     parser.add_argument("--batch_size", type=int, default=1, help="Batch size for evaluation (forced to 1).")
     parser.add_argument("--annotation_path", type=str, required=True, help="Scanqa or SQA3D annotation file path.")
     parser.add_argument("--video_folder", type=str, required=True, help="Path to the folder containing videos.")
@@ -288,6 +283,18 @@ if __name__ == "__main__":
     parser.add_argument(
         "--output_name", type=str, default="eval_vsibench", help="Directory to save evaluation results."
     )
+    # JJ to support parse None
+    parser.add_argument(
+        "--nframes",
+        type=int_or_none,
+        default=None,
+        help="Number of frames to sample from each video (or 'None' for no limit)."
+    )  
+    # JJ: video sampling config
+    parser.add_argument("--sample_fps", type=float, default=None, help="Sample FPS for video (default: None, use nframes)")
+    # JJ: connector config
+    parser.add_argument("--use_visual", type=lambda x: x.lower() == 'true', default=None, help="Use visual embeddings (true/false, default: None for model default)")
+    parser.add_argument("--use_geo", type=lambda x: x.lower() == 'true', default=None, help="Use geo embeddings (true/false, default: None for model default)")
     args = parser.parse_args()
 
     main(args)

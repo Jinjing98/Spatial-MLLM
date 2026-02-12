@@ -35,56 +35,11 @@ SFT_TYPE_TEMPLATE = {
     "na": "Please answer the question using a single word or phrase.",
 }
 
-def load_model_and_processor(model_type: str, model_path: str):
-    """Load model and processor based on type."""
-    if model_type == "custom-spatial-mllm":
-        # JJ Custom modules
-        from src.custom_qwenvl.model.custom_spatial_mllm import CustomSpatialMLLMConfig, CustomSpatialMLLMForConditionalGeneration
-        from transformers import Qwen2_5_VLProcessor
-
-        config = CustomSpatialMLLMConfig.from_pretrained(model_path)
-        model = CustomSpatialMLLMForConditionalGeneration.from_pretrained(
-            model_path,
-            config=config,
-            torch_dtype="bfloat16",
-            device_map="cuda",
-            attn_implementation="flash_attention_2",
-        )
-        processor = Qwen2_5_VLProcessor.from_pretrained(model_path, use_fast=True)
-        return model, processor
-    
-    if "spatial-mllm" == model_type:
-        from transformers import Qwen2_5_VLProcessor
-
-        from src.qwenvl.model.spatial_mllm import SpatialMLLMConfig, SpatialMLLMForConditionalGeneration
-
-        config = SpatialMLLMConfig.from_pretrained(model_path)
-        model = SpatialMLLMForConditionalGeneration.from_pretrained(
-            model_path,
-            config=config,
-            torch_dtype="bfloat16",
-            device_map="cuda",
-            attn_implementation="flash_attention_2",
-        )
-        processor = Qwen2_5_VLProcessor.from_pretrained(model_path, use_fast=True)
-        return model, processor
-
-    if "qwen2.5-vl" == model_type:
-        from transformers import Qwen2_5_VLForConditionalGeneration, Qwen2_5_VLProcessor
-
-        model = Qwen2_5_VLForConditionalGeneration.from_pretrained(
-            model_path,
-            torch_dtype="bfloat16",
-            device_map="cuda",
-            attn_implementation="flash_attention_2",
-        )
-        processor = Qwen2_5_VLProcessor.from_pretrained(model_path, use_fast=True)
-        return model, processor
-
-    raise ValueError(f"Unknown model type: {model_type}")
+# JJ: import from common_utils
+from src.evaluation.utils.common_utils import load_model_and_processor
 
 
-def build_user_message(item: Dict, video_dir: Path, video_nframes: int) -> Tuple[Dict, Optional[List[int]]]:
+def build_user_message(item: Dict, video_dir: Path, video_nframes: int, sample_fps: float = None) -> Tuple[Dict, Optional[List[int]]]:
     """Create the chat-style message payload for a single sample."""
     # build question
     raw_question = SFT_QUESTION_TEMPLATE.format(Question=item["question"])
@@ -107,7 +62,19 @@ def build_user_message(item: Dict, video_dir: Path, video_nframes: int) -> Tuple
     if (video_dir / item["dataset"] / (item["scene_name"] + ".mp4")).exists():  # mp4 video file
         video_path = (video_dir / item["dataset"] / (item["scene_name"] + ".mp4")).resolve()
         video_content["video"] = str(video_path)
-        video_content["nframes"] = video_nframes if video_nframes > 0 else None
+        
+        # JJ: Sanity check - nframes and sample_fps should not both be provided
+        assert (video_nframes is None) or (sample_fps is None), \
+            f"Cannot specify both nframes ({video_nframes}) and sample_fps ({sample_fps}). Use one or the other."
+        
+        # JJ: Set do_sample_frames if neither is provided
+        video_content["do_sample_frames"] = (video_nframes is None) and (sample_fps is None)
+        
+        # JJ: Set nframes or fps if provided
+        if video_nframes is not None:
+            video_content["nframes"] = video_nframes
+        if sample_fps is not None:
+            video_content["fps"] = sample_fps
     elif (video_dir / item["dataset"] / item["scene_name"]).exists():  # folder of frames
         frame_folder = (video_dir / item["dataset"] / item["scene_name"]).resolve()
         video_path = sorted(glob.glob(str(frame_folder / "*.png")))
@@ -116,7 +83,7 @@ def build_user_message(item: Dict, video_dir: Path, video_nframes: int) -> Tuple
         ), f"Number of frames in {frame_folder} ({len(video_path)}) does not match expected {video_nframes}."
         video_content["video"] = video_path
         
-        # Load selected_frames if available
+        # JJ: Load selected_frames if available
         selected_frames_json = frame_folder / "selected_frames.json"
         if selected_frames_json.exists():
             with open(selected_frames_json, 'r') as f:
@@ -139,11 +106,12 @@ def prepare_chat_batch(
     model_type: str,
     video_dir: Path,
     video_nframes: int,
+    sample_fps: float = None,
 ) -> Tuple[Dict, List[str]]:
     """Prepare batch for inference: build prompts, process video, and tokenize."""
-    batch_messages_and_frames = [build_user_message(item, video_dir, video_nframes) for item in batch_data]
+    batch_messages_and_frames = [build_user_message(item, video_dir, video_nframes, sample_fps) for item in batch_data]
     batch_messages = [[msg] for msg, _ in batch_messages_and_frames]
-    batch_selected_frames = [frames for _, frames in batch_messages_and_frames]
+    batch_selected_frames = [frames for _, frames in batch_messages_and_frames]# JJ
 
     prompts_text = [
         processor.apply_chat_template(example, tokenize=False, add_generation_prompt=True) for example in batch_messages
@@ -289,16 +257,17 @@ def calculate_metrics(results):
     }
 
 
-def evaluate_vsibench(vsi_data, model_type, model_path, batch_size, video_dir, output_path, video_nframes):
+def evaluate_vsibench(vsi_data, model_type, model_path, batch_size, video_dir, output_path, video_nframes, sample_fps=None, use_visual=None, use_geo=None):
     """Evaluate model on a specific dataset. Forces batch size to 1."""
 
     setup_logging()
-    model, processor = load_model_and_processor(model_type, model_path)
+    # JJ: load model and processor with customized use_visual/use_geo
+    model, processor = load_model_and_processor(model_type, model_path, use_visual=use_visual, use_geo=use_geo)
     final_output = []
 
     for i in tqdm(range(0, len(vsi_data), batch_size), desc="Evaluating VSIBench"):
         batch_data = vsi_data[i : i + batch_size]
-        batch_llm_inputs, prompts_text = prepare_chat_batch(batch_data, processor, model_type, video_dir, video_nframes)
+        batch_llm_inputs, prompts_text = prepare_chat_batch(batch_data, processor, model_type, video_dir, video_nframes, sample_fps)
         batch_output_text = inference_batch(batch_llm_inputs, model, processor)
         batch_results = postprocess_batch(batch_data, batch_output_text, prompts_text)
         final_output.extend(batch_results)
@@ -310,10 +279,10 @@ def evaluate_vsibench(vsi_data, model_type, model_path, batch_size, video_dir, o
     return final_output
 
 
-def run_worker(gpu_id, vsi_data, model_type, model_path, batch_size, video_dir, output_path, video_nframes):
+def run_worker(gpu_id, vsi_data, model_type, model_path, batch_size, video_dir, output_path, video_nframes, sample_fps=None, use_visual=None, use_geo=None):
     """Worker function to run evaluation on a specific GPU."""
     os.environ["CUDA_VISIBLE_DEVICES"] = str(gpu_id)
-    evaluate_vsibench(vsi_data, model_type, model_path, batch_size, video_dir, output_path, video_nframes)
+    evaluate_vsibench(vsi_data, model_type, model_path, batch_size, video_dir, output_path, video_nframes, sample_fps, use_visual, use_geo)
 
 
 def main(args):
@@ -388,6 +357,9 @@ def main(args):
                 video_dir,
                 output_path_gpu,
                 args.nframes,
+                args.sample_fps,
+                args.use_visual,
+                args.use_geo,
             ),
         )
         p.start()
@@ -419,10 +391,15 @@ def main(args):
 
 
 if __name__ == "__main__":
+    def int_or_none(x):
+        if x.lower() == "none":
+            return None
+        return int(x)
+
     parser = argparse.ArgumentParser(description="Evaluate model on VSIBench dataset.")
     parser.add_argument("--model_path", type=str, required=True, help="Path to the model.")
     parser.add_argument("--model_type", type=str, default="spatial-mllm", help="Type of the model.")
-    parser.add_argument("--nframes", type=int, default=16, help="Number of frames to sample from each video.")
+    # parser.add_argument("--nframes", type=int, default=16, help="Number of frames to sample from each video.")
     parser.add_argument("--batch_size", type=int, default=1, help="Batch size for evaluation (forced to 1).")
     parser.add_argument(
         "--annotation_dir", type=str, required=True, help="Directory containing the VSIBench data files."
@@ -458,6 +435,19 @@ if __name__ == "__main__":
         default=None,
         help="List of scene names to evaluate. If not specified, all scenes will be evaluated.",
     )
+
+    # JJ to support parse None
+    parser.add_argument(
+        "--nframes",
+        type=int_or_none,
+        default=None,
+        help="Number of frames to sample from each video (or 'None' for no limit)."
+    )    
+    # JJ: video sampling config
+    parser.add_argument("--sample_fps", type=float, default=None, help="Sample FPS for video (default: None, use nframes)")
+    # JJ: connector config
+    parser.add_argument("--use_visual", type=lambda x: x.lower() == 'true', default=None, help="Use visual embeddings (true/false, default: None for model default)")
+    parser.add_argument("--use_geo", type=lambda x: x.lower() == 'true', default=None, help="Use geo embeddings (true/false, default: None for model default)")
     args = parser.parse_args()
 
     main(args)
