@@ -49,24 +49,22 @@ BASE_DIR="${RESULTS_SAVE_ROOT}/vsibench"
 
 # Number of frames to sample
 # NUM_FRAMES="${NUM_FRAMES:-4}"
-# NUM_FRAMES="${NUM_FRAMES:-8}"
-NUM_FRAMES="${NUM_FRAMES:-16}"
+NUM_FRAMES="${NUM_FRAMES:-8}"
+# NUM_FRAMES="${NUM_FRAMES:-16}"
 # NUM_FRAMES="${NUM_FRAMES:-32}"
 
 # Sampling type: "both" (default), "sa", "uniform", "mergeaware_uniform", "mergeaware_sa"
 # SAMPLING_TYPE="${SAMPLING_TYPE:-both}"
-# SAMPLING_TYPE="${SAMPLING_TYPE:-sa}"
+SAMPLING_TYPE="${SAMPLING_TYPE:-sa}"
 # SAMPLING_TYPE="${SAMPLING_TYPE:-mergeaware_uniform}"
 # SAMPLING_TYPE="${SAMPLING_TYPE:-uniform}"
-SAMPLING_TYPE="${SAMPLING_TYPE:-mergeaware_sa}"
-# 
+# SAMPLING_TYPE="${SAMPLING_TYPE:-mergeaware_sa}"
+
 # JJ : Temporal merge aware sampling parameters
-# neighbor_mode: "before", "after" (default), or "random"
-NEIGHBOR_MODE="${NEIGHBOR_MODE:-random}"
-# fid_step_size: Frame ID step size for mergeaware_uniform (default: 30)
-FID_STEP_SIZE="${FID_STEP_SIZE:-30}"
-# index_step_size: Index step size for mergeaware_sa (default: 1)
-INDEX_STEP_SIZE="${INDEX_STEP_SIZE:-1}"
+# neighbor_mode: "before" (default), "after", or "random"
+NEIGHBOR_MODE="${NEIGHBOR_MODE:-before}"
+# step_size: step size for adding neighbor frames (default: 1)
+STEP_SIZE="${STEP_SIZE:-1}"
 
 # Dry run mode: set DRY_RUN="--dry_run" to only check anomalies without processing
 # Usage: DRY_RUN="--dry_run" bash scripts/evaluation/sa_sampling.sh
@@ -84,18 +82,15 @@ run_sampling() {
     dataset=$1
     
     # JJ : Build output folder suffix with temporal merge aware parameters
-    # Abbreviate neighbor_mode: before->bef, after->aft, random->rnd
-    case "$NEIGHBOR_MODE" in
-        "before") NBR_ABBREV="bef" ;;
-        "after")  NBR_ABBREV="aft" ;;
-        "random") NBR_ABBREV="rnd" ;;
-        *)        NBR_ABBREV="$NEIGHBOR_MODE" ;;
-    esac
-    
-    if [[ "$SAMPLING_TYPE" == "mergeaware_uniform" ]]; then
-        SUFFIX="_${NBR_ABBREV}_fidss${FID_STEP_SIZE}"
-    elif [[ "$SAMPLING_TYPE" == "mergeaware_sa" ]]; then
-        SUFFIX="_${NBR_ABBREV}_idxss${INDEX_STEP_SIZE}"
+    if [[ "$SAMPLING_TYPE" == "mergeaware_uniform" ]] || [[ "$SAMPLING_TYPE" == "mergeaware_sa" ]]; then
+        # Abbreviate neighbor_mode: before->bef, after->aft, random->rnd
+        case "$NEIGHBOR_MODE" in
+            "before") NBR_ABBREV="bef" ;;
+            "after")  NBR_ABBREV="aft" ;;
+            "random") NBR_ABBREV="rnd" ;;
+            *)        NBR_ABBREV="$NEIGHBOR_MODE" ;;
+        esac
+        SUFFIX="_nbr${NBR_ABBREV}_ss${STEP_SIZE}"
     else
         SUFFIX=""
     fi
@@ -130,8 +125,7 @@ run_sampling() {
             --num_frames $NUM_FRAMES \
             --sampling_type "$SAMPLING_TYPE" \
             --neighbor_mode "$NEIGHBOR_MODE" \
-            --fid_step_size $FID_STEP_SIZE \
-            --index_step_size $INDEX_STEP_SIZE \
+            --step_size $STEP_SIZE \
             --video_path "$VIDEO_PATH" \
             --save_extra \
             $DRY_RUN
