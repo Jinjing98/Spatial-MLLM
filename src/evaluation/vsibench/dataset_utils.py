@@ -64,10 +64,21 @@ def mean_relative_accuracy(
     return mra.item()
 
 
+# JJ : extract the leading option letter from MCA answers like "b. table" -> "b"
+def _extract_mca_choice(text: str) -> str:
+    """Extract leading option letter (a-d) from an MCA answer string."""
+    text = text.strip()
+    m = re.match(r"^([a-d])(?:[\.\)\s:,]|$)", text)
+    return m.group(1) if m else text
+
+
 def vsi_reward(clean_ans_gt: str, clean_ans_pred: str, question_type: str) -> float:
     """Calculate reward based on question type and model output."""
     if question_type in MCA_QUESTION_TYPES:
-        return 1.0 if clean_ans_pred.strip() == clean_ans_gt.strip() else 0.0
+        # JJ : use extracted choice letter for robust MCA comparison: support qwen3 answer with "B. xxx" format.
+        gt_choice = _extract_mca_choice(clean_ans_gt.strip())
+        pred_choice = _extract_mca_choice(clean_ans_pred.strip())
+        return 1.0 if pred_choice == gt_choice else 0.0
 
     if question_type in NA_QUESTION_TYPES:
         gt_number = normalize_number(clean_ans_gt)

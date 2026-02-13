@@ -10,10 +10,10 @@
 # JJ: Fixed default values (not overridable by env vars)
 MODEL_TYPE="qwen2.5-vl"
 # MODEL_PATH="Qwen/Qwen2.5-VL-3B-Instruct"
-# MODEL_TYPE="qwen3-vl"
-# MODEL_PATH="Qwen/Qwen3-VL-2B-Instruct"
+MODEL_TYPE="qwen3-vl"
+MODEL_PATH="Qwen/Qwen3-VL-2B-Instruct"
 # MODEL_TYPE="spatial-mllm"
-MODEL_TYPE="custom-spatial-mllm"
+# MODEL_TYPE="custom-spatial-mllm"
 # MODEL_PATH="Diankun/Spatial-MLLM-v1.1-Instruct-135K"
 # VIDEO_PATH="datasets/fool_mllm/42446103.mp4" # given video path
 VIDEO_PATH="datasets/fool_mllm/42446103_sa16_reference" # given sampled video path

@@ -99,6 +99,17 @@ nframes=(16)
 # sample_fps=(None)
 # sample_fps=(1)
 
+# JJ : Parse CLI args for skipping eval / metric phases
+# Usage: bash script.sh [--skip_eval] [--skip_metric]
+EXTRA_ARGS=""
+for arg in "$@"; do
+    case "$arg" in
+        --skip_eval)  EXTRA_ARGS+=" --skip_eval" ;;
+        --skip_metric) EXTRA_ARGS+=" --skip_metric" ;;
+        *) echo "Unknown argument: $arg"; exit 1 ;;
+    esac
+done
+
 for nframe in "${nframes[@]}"; do
     TIMESTAMP=$(date +"%Y%m%d_%H%M%S")
     EXP_DIR="${OUTPUT_ROOT}/${MODEL_NAME}-${nframe}f"
@@ -133,6 +144,7 @@ for nframe in "${nframes[@]}"; do
         --output_dir "$EXP_DIR" \
         --output_name "eval_result" \
         ${SCENE_NAME_LIST[@]:+--scene_names ${SCENE_NAME_LIST[@]}} \
+        $EXTRA_ARGS \
         2>&1 | tee -a "$LOG_FILE"
         
         # --sample_fps 0.01 \
