@@ -353,71 +353,96 @@ def main(args):
         vsi_data = vsi_data.filter(lambda x: x["scene_name"] in args.scene_names)
         print(f"Filtered dataset size: {len(vsi_data)}")
     
-    n_gpu = torch.cuda.device_count()
-    if n_gpu <= 0:
-        raise RuntimeError("VSIBench evaluation requires at least one CUDA device.")
+    # JJ : Eval phase (skippable via --skip_eval)
+    if not args.skip_eval:
+        n_gpu = torch.cuda.device_count()
+        if n_gpu <= 0:
+            raise RuntimeError("VSIBench evaluation requires at least one CUDA device.")
 
-    print(f"Starting evaluation on {n_gpu} GPUs...")
+        print(f"Starting evaluation on {n_gpu} GPUs...")
 
-    # Parse CUDA_VISIBLE_DEVICES to handle specific GPU selection
-    cuda_visible_devices = os.environ.get("CUDA_VISIBLE_DEVICES")
-    if cuda_visible_devices:
-        gpu_ids = [x.strip() for x in cuda_visible_devices.split(",") if x.strip()]
-    else:
-        gpu_ids = [str(i) for i in range(n_gpu)]
-    print('GPU IDs: ', gpu_ids)
-    processes = []
-    output_paths = []
-
-    for idx, data_chunk in enumerate(chunk_dataset(vsi_data, n_gpu)):
-        output_path_gpu = output_dir / f"results_{args.model_type}_{idx}.json"
-        output_paths.append(output_path_gpu)
-
-        # Select GPU ID
-        gpu_id = gpu_ids[idx] if idx < len(gpu_ids) else str(idx)
-
-        p = mp.Process(
-            target=run_worker,
-            args=(
-                gpu_id,
-                data_chunk,
-                args.model_type,
-                args.model_path,
-                args.batch_size,
-                video_dir,
-                output_path_gpu,
-                args.nframes,
-                args.sample_fps,
-                args.use_visual,
-                args.use_geo,
-            ),
-        )
-        p.start()
-        processes.append(p)
-
-    for p in processes:
-        p.join()
-
-    final_output = []
-    for path in output_paths:
-        if path.exists():
-            with open(path, "r") as f:
-                final_output.extend(json.load(f))
+        # Parse CUDA_VISIBLE_DEVICES to handle specific GPU selection
+        cuda_visible_devices = os.environ.get("CUDA_VISIBLE_DEVICES")
+        if cuda_visible_devices:
+            gpu_ids = [x.strip() for x in cuda_visible_devices.split(",") if x.strip()]
         else:
-            print(f"Warning: Output file {path} not found.")
+            gpu_ids = [str(i) for i in range(n_gpu)]
+        print('GPU IDs: ', gpu_ids)
+        processes = []
+        output_paths = []
 
-    # Compute the overall metrics across shards.
-    final_acc_dict = calculate_metrics(final_output)
-    save_json(
-        output_dir / f"results_{args.model_type}.json",
-        final_output,
-    )
-    save_json(
-        output_dir / f"metrics_{args.model_type}.json",
-        final_acc_dict,
-    )
-    print(f"Finished evaluation for vsibench.")
-    print(f"Final Metrics: {final_acc_dict}")
+        for idx, data_chunk in enumerate(chunk_dataset(vsi_data, n_gpu)):
+            output_path_gpu = output_dir / f"results_{args.model_type}_{idx}.json"
+            output_paths.append(output_path_gpu)
+
+            # Select GPU ID
+            gpu_id = gpu_ids[idx] if idx < len(gpu_ids) else str(idx)
+
+            p = mp.Process(
+                target=run_worker,
+                args=(
+                    gpu_id,
+                    data_chunk,
+                    args.model_type,
+                    args.model_path,
+                    args.batch_size,
+                    video_dir,
+                    output_path_gpu,
+                    args.nframes,
+                    args.sample_fps,
+                    args.use_visual,
+                    args.use_geo,
+                ),
+            )
+            p.start()
+            processes.append(p)
+
+        for p in processes:
+            p.join()
+    else:
+        print("Skipping evaluation phase (--skip_eval).")
+
+    # JJ : Metrics phase (skippable via --skip_metric)
+    if not args.skip_metric:
+        # Load results from existing shard files
+        merged_results_path = output_dir / f"results_{args.model_type}.json"
+        shard_paths = sorted(output_dir.glob(f"results_{args.model_type}_*.json"))
+
+        final_output = []
+        if shard_paths:
+            for path in shard_paths:
+                with open(path, "r") as f:
+                    final_output.extend(json.load(f))
+        elif merged_results_path.exists():
+            with open(merged_results_path, "r") as f:
+                final_output = json.load(f)
+        else:
+            print(f"Warning: No result files found in {output_dir} for model_type={args.model_type}.")
+
+        # JJ : re-compute reward with latest vsi_reward logic so --skip_eval picks up fixes
+        for res in final_output:
+            clean_pred = clean_text(res.get("model_output", ""))
+            clean_gt = clean_text(res.get("sample", {}).get("ground_truth", ""))
+            qtype = res.get("sample", {}).get("question_type", "")
+            res["cleaned_model_output"] = clean_pred
+            res["cleaned_gt_answer"] = clean_gt
+            res["reward"] = vsi_reward(clean_gt, clean_pred, qtype)
+            res["correct"] = res["reward"] == 1.0
+
+        # Compute the overall metrics across shards.
+        final_acc_dict = calculate_metrics(final_output)
+        save_json(
+            merged_results_path,
+            final_output,
+        )
+        save_json(
+            output_dir / f"metrics_{args.model_type}.json",
+            final_acc_dict,
+        )
+        print(f"Finished evaluation for vsibench.")
+        print(f"Final Metrics: {final_acc_dict}")
+    else:
+        print("Skipping metrics computation (--skip_metric).")
 
 
 if __name__ == "__main__":
@@ -478,6 +503,9 @@ if __name__ == "__main__":
     # JJ: connector config
     parser.add_argument("--use_visual", type=lambda x: x.lower() == 'true', default=None, help="Use visual embeddings (true/false, default: None for model default)")
     parser.add_argument("--use_geo", type=lambda x: x.lower() == 'true', default=None, help="Use geo embeddings (true/false, default: None for model default)")
+    # JJ : skip flags for eval / metric phases
+    parser.add_argument("--skip_eval", action="store_true", default=False, help="Skip the evaluation (inference) phase, only compute metrics from existing results.")
+    parser.add_argument("--skip_metric", action="store_true", default=False, help="Skip the metrics computation phase, only run evaluation.")
     args = parser.parse_args()
 
     main(args)
