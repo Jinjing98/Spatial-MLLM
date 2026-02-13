@@ -14,28 +14,28 @@
 
 # test on capella
 
-# Global
-DATA_ROOT="/data/horse/ws/jixu233b-metadata_ws/datasets"
-MODELS_ROOT="/data/horse/ws/jixu233b-metadata_ws/models/Spatial-MLLM"
-RESULTS_SAVE_ROOT="/home/jixu233b/Projects/VLM_3D/SpatialMllmHallucinate/third_party/Spatial-MLLM"
+# # Global
+# DATA_ROOT="/data/horse/ws/jixu233b-metadata_ws/datasets"
+# MODELS_ROOT="/data/horse/ws/jixu233b-metadata_ws/models/Spatial-MLLM"
+# RESULTS_SAVE_ROOT="/home/jixu233b/Projects/VLM_3D/SpatialMllmHallucinate/third_party/Spatial-MLLM"
 
 # tso
 DATA_ROOT="/mnt/nct-zfs/TCO-All/SharedDatasets"
 MODELS_ROOT="/mnt/cluster/workspaces/jinjingxu/proj/vlm/SpatialMllmHallucinate/third_party/Spatial-MLLM"
 RESULTS_SAVE_ROOT="/mnt/cluster/workspaces/jinjingxu/proj/vlm/SpatialMllmHallucinate/third_party/Spatial-MLLM"
 
-# activate conda
-source /software/rapids/r24.10/Anaconda3/2024.02-1/etc/profile.d/conda.sh
-conda activate /data/horse/ws/jixu233b-3d_ws/envs/spatial-mllm
-module load CUDA/12.4.0 # nvcc
+# # activate conda
+# source /software/rapids/r24.10/Anaconda3/2024.02-1/etc/profile.d/conda.sh
+# conda activate /data/horse/ws/jixu233b-3d_ws/envs/spatial-mllm
+# module load CUDA/12.4.0 # nvcc
 
 cd "$(dirname "$0")"
 cd ../..
-cd "$SLURM_SUBMIT_DIR"
+# cd "$SLURM_SUBMIT_DIR"
 
-# This avoids NFS slowdowns.
-export TRITON_CACHE_DIR=/tmp/triton_cache_${USER}
-mkdir -p $TRITON_CACHE_DIR
+# # This avoids NFS slowdowns.
+# export TRITON_CACHE_DIR=/tmp/triton_cache_${USER}
+# mkdir -p $TRITON_CACHE_DIR
 
 # Print current directory
 pwd
@@ -75,11 +75,37 @@ MODEL_NAME_SUFFIX=""
 
 MODEL_TYPE="custom-spatial-mllm"
 MODEL_NAME_SUFFIX="adaptedPosID_RoPE"
+
+
+# MODEL_TYPE="qwen2.5-vl"
+# MODEL_PATH='Qwen/Qwen2.5-VL-3B-Instruct'
+
+MODEL_TYPE="spatial-mllm"
+# MODEL_TYPE="custom-spatial-mllm"
+MODEL_PATH="${MODELS_ROOT}/checkpoints/Spatial-MLLM-v1.1-Instruct-135K"
+MODEL_TYPE="spatial-mllm"
+# MODEL_TYPE="custom-spatial-mllm"
+# MODEL_TYPE="qwen2.5-vl"
+# MODEL_PATH='Qwen/Qwen2.5-VL-3B-Instruct'
+# MODEL_TYPE="qwen2.5-vl"
+# MODEL_PATH='Qwen/Qwen2.5-VL-3B-Instruct'
+# MODEL_TYPE="spatial-mllm"
+# MODEL_TYPE="custom-spatial-mllm"
+# JJ: Fixed default values (not overridable by env vars)
+# MODEL_TYPE="qwen2.5-vl"
+# MODEL_PATH="Qwen/Qwen2.5-VL-3B-Instruct"
+MODEL_TYPE="qwen3-vl"
+MODEL_PATH="Qwen/Qwen3-VL-2B-Instruct"
+# MODEL_TYPE="spatial-mllm"
+# MODEL_TYPE="custom-spatial-mllm"
+# MODEL_PATH="Diankun/Spatial-MLLM-v1.1-Instruct-135K"
+MODEL_NAME_SUFFIX=""
+
 MODEL_NAME="${MODEL_TYPE}${MODEL_NAME_SUFFIX}"
 
 # nframes=(None)
-nframes=(32)
-# nframes=(16)
+# nframes=(32)
+nframes=(16)
 # nframes=(8)
 
 # sample_fps=(None)
@@ -88,16 +114,16 @@ nframes=(32)
 # QUESTION_TYPES=("${QUESTION_TYPE_LIST[3]}" "${QUESTION_TYPE_LIST[4]}" "${QUESTION_TYPE_LIST[5]}") #ego. 
 # QUESTION_TYPES=("${QUESTION_TYPE_LIST[0]}" "${QUESTION_TYPE_LIST[1]}" "${QUESTION_TYPE_LIST[6]}") #allo.
 
-DATASETS=("${DATASET_LIST[@]}") #all datasets
+# DATASETS=("${DATASET_LIST[@]}") #all datasets
 # QUESTION_TYPES=("${QUESTION_TYPE_LIST[6]}") #allo.
 # DATASETS=("${DATASET_LIST[1]}") #arkitscenes
 # DATASETS=("${DATASET_LIST[2]}") #arkitscenes
-# DATASETS=("${DATASET_LIST[0]}") #arkitscenes
-QUESTION_TYPES=("${QUESTION_TYPE_LIST[@]}") #all cases
-# QUESTION_TYPES=("${QUESTION_TYPE_LIST[6]}") #all cases
+DATASETS=("${DATASET_LIST[0]}") #arkitscenes
+# QUESTION_TYPES=("${QUESTION_TYPE_LIST[@]}") #all cases
+QUESTION_TYPES=("${QUESTION_TYPE_LIST[6]}") #all cases
 
-SCENE_NAME_LIST=()  # By default, empty array means all scenes will be evaluated
-# SCENE_NAME_LIST=("42446103")  # Example: specify particular scenes to evaluate
+# SCENE_NAME_LIST=()  # By default, empty array means all scenes will be evaluated
+SCENE_NAME_LIST=("42446103")  # Example: specify particular scenes to evaluate
 
 
 
@@ -135,12 +161,20 @@ for nframe in "${nframes[@]}"; do
     } > "$LOG_FILE"
 
     # --- run experiment ---
+    # JJ : Parse CLI args and build EXTRA_ARGS
     EXTRA_ARGS=""
+    for arg in "$@"; do
+        case "$arg" in
+            --skip_eval)  EXTRA_ARGS+=" --skip_eval" ;;
+            --skip_metric) EXTRA_ARGS+=" --skip_metric" ;;
+            *) echo "Unknown argument: $arg"; exit 1 ;;
+        esac
+    done
     if [ ${#SCENE_NAME_LIST[@]} -gt 0 ]; then
-        EXTRA_ARGS="--scene_names ${SCENE_NAME_LIST[@]}"
+        EXTRA_ARGS+=" --scene_names ${SCENE_NAME_LIST[@]}"
     fi
     
-    python /home/jixu233b/Projects/VLM_3D/SpatialMllmHallucinate/third_party/Spatial-MLLM/src/evaluation/vsibench/eval_vsibench.py \
+    python src/evaluation/vsibench/eval_vsibench.py \
         --model_path $MODEL_PATH \
         --model_type $MODEL_TYPE \
         --nframes $nframe \
