@@ -95,12 +95,13 @@ MODEL_PATH="Qwen/Qwen3-VL-2B-Instruct"
 # MODEL_TYPE="custom-spatial-mllm"
 # MODEL_PATH="Diankun/Spatial-MLLM-v1.1-Instruct-135K"
 
+MODEL_NAME_SUFFIX=""
 MODEL_NAME="${MODEL_TYPE}${MODEL_NAME_SUFFIX}"
 
 # nframes=(None)
 # nframes=(32)
-nframes=(16)
-# nframes=(8)
+# nframes=(16)
+nframes=(8)
 
 # sample_fps=(None)
 # sample_fps=(1)

@@ -1,6 +1,17 @@
+13.02:
+gen the mergeaware_sa/mergeaware_uniform
+mergeaware_sa: 
+8 2828004
+16  2828006
+32 2828008
+mergeaware_uniform: 
+8 2828009
+16 2828010
+32 2828011
+
 12.02
 #eval qwen3vl with video input for frames num on sa
-sa8 2808207
+sa8 2828052 2808207
 sa16 2808218 2804290
 sa32 2804296
 
@@ -10,7 +21,7 @@ f16 2804235
 f32 2804225
 
 #Gen sa samples cam pose and other meta
-2803812 f8_both extra
+2828283 2823358(sa only) 2803812 f8_both extra
 2803826 f16_both extra
 2806350 f32_both extra
 
