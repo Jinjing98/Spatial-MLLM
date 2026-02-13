@@ -4,7 +4,7 @@
 #SBATCH --ntasks=1
 #SBATCH --gres=gpu:1
 #SBATCH --gpus-per-task=1
-#SBATCH --time=10:00:00
+#SBATCH --time=40:00:00
 #SBATCH --mem=80G
 #SBATCH --partition=capella
 #SBATCH --mail-user=xvjinjing8@gmail.com
@@ -39,17 +39,18 @@ pwd
 BASE_DIR="${DATA_ROOT}/vsibench"
 
 # Number of frames to sample
-NUM_FRAMES="${NUM_FRAMES:-8}"
+# NUM_FRAMES="${NUM_FRAMES:-8}"
 # NUM_FRAMES="${NUM_FRAMES:-16}"
-# NUM_FRAMES="${NUM_FRAMES:-32}"
+NUM_FRAMES="${NUM_FRAMES:-32}"
 
 # Sampling type: "both" (default), "sa", or "uniform"
-# SAMPLING_TYPE="${SAMPLING_TYPE:-both}"
-SAMPLING_TYPE="${SAMPLING_TYPE:-sa}"
+SAMPLING_TYPE="${SAMPLING_TYPE:-both}"
+# SAMPLING_TYPE="${SAMPLING_TYPE:-sa}"
 
 # Dry run mode: set DRY_RUN="--dry_run" to only check anomalies without processing
 # Usage: DRY_RUN="--dry_run" bash scripts/evaluation/sa_sampling.sh
 DRY_RUN="${DRY_RUN:-}"
+# VIDEO_PATH="/data/horse/ws/jixu233b-metadata_ws/datasets/vsibench/arkitscenes/42446103.mp4"
 
 if [[ -n "$DRY_RUN" ]]; then
     echo "============================================"
@@ -70,6 +71,7 @@ run_sampling() {
             --output_folder "${BASE_DIR}/sa_sampling_${NUM_FRAMES}f/${dataset}" \
             --num_frames $NUM_FRAMES \
             --sampling_type "sa" \
+            --save_extra \
             $DRY_RUN
         
         # Process uniform sampling
@@ -80,6 +82,7 @@ run_sampling() {
             --output_folder "${BASE_DIR}/uniform_sampling_${NUM_FRAMES}f/${dataset}" \
             --num_frames $NUM_FRAMES \
             --sampling_type "uniform" \
+            --save_extra \
             $DRY_RUN
     else
         # Single sampling type
@@ -89,7 +92,10 @@ run_sampling() {
             --output_folder "${BASE_DIR}/${SAMPLING_TYPE}_sampling_${NUM_FRAMES}f/${dataset}" \
             --num_frames $NUM_FRAMES \
             --sampling_type "$SAMPLING_TYPE" \
+            --save_extra \
             $DRY_RUN
+            # --video_path "$VIDEO_PATH" \
+
     fi
     
     echo "Sampling complete for ${dataset}"

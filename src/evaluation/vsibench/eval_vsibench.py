@@ -20,6 +20,7 @@ from datasets import load_dataset
 from src.evaluation.utils.common_utils import (
     chunk_dataset,
     flatten,
+    gen_videos_metadata,
     prepare_spatial_mllm_inputs,
     prepare_spatial_mllm_inputs_with_framesid,
     save_json,
@@ -118,31 +119,60 @@ def prepare_chat_batch(
     ]
     prompts_text_copy = prompts_text.copy()
 
-    video_inputs = []
-    image_inputs = []
-    for example in batch_messages:
-        images, videos = process_vision_info(example)
-        if images:
-            image_inputs.extend(images)
-        elif videos:
-            video_inputs.extend(videos)
-        else:
-            raise ValueError("Each example must contain either images or videos.")
+    # JJ : Split vision processing by model type (qwen3-vl needs extract_vision_info + gen_videos_metadata)
+    if model_type == "qwen3-vl":
+        from qwen_vl_utils import extract_vision_info
+        video_inputs = []
+        image_inputs = []
+        videos_metadata_all = []
+        for example in batch_messages:
+            vision_infos = extract_vision_info(example)
+            imgs, vids, vids_meta = gen_videos_metadata(vision_infos)
+            if imgs:
+                image_inputs.extend(imgs)
+            if vids:
+                video_inputs.extend(vids)
+            if vids_meta:
+                videos_metadata_all.extend(vids_meta)
 
-    batch = processor(
-        text=prompts_text,
-        images=image_inputs if image_inputs else None,
-        videos=video_inputs if video_inputs else None,
-        return_tensors="pt",
-        padding=True,
-        padding_side="left",
-    )
+        batch = processor(
+            text=prompts_text,
+            images=image_inputs if image_inputs else None,
+            videos=video_inputs if video_inputs else None,
+            video_metadata=videos_metadata_all if videos_metadata_all else None,
+            do_sample_frames=False,
+            return_tensors="pt",
+            padding=True,
+            padding_side="left",
+        )
+    else:
+        video_inputs = []
+        image_inputs = []
+        for example in batch_messages:
+            images, videos = process_vision_info(example)
+            if images:
+                image_inputs.extend(images)
+            elif videos:
+                video_inputs.extend(videos)
+            else:
+                raise ValueError("Each example must contain either images or videos.")
+
+        batch = processor(
+            text=prompts_text,
+            images=image_inputs if image_inputs else None,
+            videos=video_inputs if video_inputs else None,
+            return_tensors="pt",
+            padding=True,
+            padding_side="left",
+        )
 
     if "spatial-mllm" == model_type:
         batch = prepare_spatial_mllm_inputs(batch, video_inputs, image_inputs)
     elif "custom-spatial-mllm" == model_type:
         # JJ
         batch = prepare_spatial_mllm_inputs_with_framesid(batch, video_inputs, image_inputs, batch_selected_frames)
+    elif model_type in ["qwen2.5-vl", "qwen3-vl"]:
+        pass  # JJ : No special batch preparation needed
     else:
         raise ValueError(f"Unknown model type: {model_type}")
 
