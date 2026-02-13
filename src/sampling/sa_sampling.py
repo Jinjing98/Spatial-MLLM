@@ -182,6 +182,88 @@ def space_aware_frame_sampling(vggt, images, K, dtype):
     return selected_frames, predictions
 
 
+# JJ : Temporal merge aware sampling helper
+def add_neighbor_frames(sampled_indices, neighbor_mode, step_size, total_frames, raise_on_overlap=True):
+    """
+    Add neighbor frames to sampled indices based on temporal merge aware strategy.
+    
+    Special boundary handling:
+    - First frame: always uses 'after' mode (to avoid negative indices)
+    - Last frame: always uses 'before' mode (to avoid exceeding total_frames)
+    - Middle frames: use the specified neighbor_mode
+    
+    Args:
+        sampled_indices: List of initially sampled frame indices (sorted, incremental).
+        neighbor_mode: 'before', 'after', or 'random' (applies to middle frames).
+        step_size: Step size for neighbor frame offset.
+        total_frames: Total number of frames in the video/pool.
+        raise_on_overlap: Deprecated, always raises on overlap.
+    
+    Returns:
+        List[int]: Final frame indices (sorted, incremental) with neighbors added.
+    
+    Raises:
+        ValueError: If neighbor frame is out of bounds or overlaps with adjacent frames.
+    """
+    import random
+    
+    final_indices = []
+    sampled_indices = sorted(sampled_indices)
+    num_sampled = len(sampled_indices)
+    
+    for i, frame_idx in enumerate(sampled_indices):
+        # Determine neighbor position with boundary handling
+        is_first = (i == 0)
+        is_last = (i == num_sampled - 1)
+        
+        if is_first:
+            # First frame: force 'after' to avoid negative indices
+            mode = "after"
+        elif is_last:
+            # Last frame: force 'before' to avoid exceeding total_frames
+            mode = "before"
+        else:
+            # Middle frames: use specified neighbor_mode
+            if neighbor_mode == "random":
+                mode = random.choice(["before", "after"])
+            else:
+                mode = neighbor_mode
+        
+        # Calculate neighbor frame index
+        if mode == "before":
+            neighbor_idx = frame_idx - step_size
+            
+            # Check overflow: out of bounds or overlaps with previous sampled frame
+            if neighbor_idx < 0:
+                raise ValueError(f"Neighbor frame {neighbor_idx} < 0 for frame {frame_idx}. "
+                               f"Cannot add neighbor with step_size={step_size} in 'before' mode.")
+            elif i > 0 and neighbor_idx <= sampled_indices[i-1]:
+                raise ValueError(f"Neighbor frame {neighbor_idx} overlaps with previous frame {sampled_indices[i-1]} "
+                               f"for frame {frame_idx}. Increase frame spacing or decrease step_size.")
+            
+            # Add in order: [neighbor, frame]
+            final_indices.extend([neighbor_idx, frame_idx])
+        
+        else:  # mode == "after"
+            neighbor_idx = frame_idx + step_size
+            
+            # Check overflow: out of bounds or overlaps with next sampled frame
+            if neighbor_idx >= total_frames:
+                raise ValueError(f"Neighbor frame {neighbor_idx} >= total_frames {total_frames} for frame {frame_idx}. "
+                               f"Cannot add neighbor with step_size={step_size} in 'after' mode.")
+            elif i < len(sampled_indices) - 1 and neighbor_idx >= sampled_indices[i+1]:
+                raise ValueError(f"Neighbor frame {neighbor_idx} overlaps with next frame {sampled_indices[i+1]} "
+                               f"for frame {frame_idx}. Increase frame spacing or decrease step_size.")
+            
+            # Add in order: [frame, neighbor]
+            final_indices.extend([frame_idx, neighbor_idx])
+    
+    # Sort and ensure incremental (should already be incremental by construction)
+    # Convert all to Python int to avoid numpy.int64 serialization issues
+    final_indices = sorted([int(x) for x in final_indices])
+    return final_indices
+
+
 def load_and_preprocess_images(image_path_list):
     images = []
     shapes = set()
@@ -302,13 +384,393 @@ def create_video_from_frames(frame_dir, output_video_path, fps=1):
             os.remove(file_list_path)
 
 
+# JJ : Helper functions for process_videos_on_device refactoring
+def check_video_completion(video_name, args):
+    """
+    Check if a video has already been processed completely.
+    
+    Returns:
+        tuple: (skip_video, anomalies) where skip_video is bool and anomalies is list of str
+    """
+    skip_video = True
+    anomalies = []
+    
+    # Check space-aware sampling
+    if args.sampling_type in ["both", "sa"]:
+        sa_dir = os.path.join(args.output_folder, video_name)
+        metadata_path = os.path.join(sa_dir, "selected_frames.json")
+        
+        if os.path.exists(sa_dir):
+            png_files = glob(os.path.join(sa_dir, "*.png"))
+            png_count = len(png_files)
+            
+            metadata_valid = False
+            if os.path.exists(metadata_path):
+                try:
+                    with open(metadata_path, 'r') as f:
+                        metadata = json.load(f)
+                    if metadata.get("num_frames") == args.num_frames:
+                        metadata_valid = True
+                except (json.JSONDecodeError, KeyError):
+                    pass
+            
+            if png_count != args.num_frames:
+                anomalies.append(f"SA: PNG count {png_count}/{args.num_frames}")
+                skip_video = False
+            elif not metadata_valid:
+                anomalies.append(f"SA: metadata invalid")
+                skip_video = False
+            
+            if args.save_extra and not os.path.exists(os.path.join(sa_dir, "sa_predictions.pt")):
+                anomalies.append(f"SA: predictions.pt missing")
+                skip_video = False
+        else:
+            anomalies.append(f"SA: dir not found")
+            skip_video = False
+    
+    # Check uniform sampling
+    if args.sampling_type in ["both", "uniform"]:
+        uniform_dir = os.path.join(args.output_folder, video_name)
+        
+        if os.path.exists(uniform_dir):
+            png_files = glob(os.path.join(uniform_dir, "*.png"))
+            png_count = len(png_files)
+            if png_count != args.num_frames:
+                anomalies.append(f"Uniform: PNG count {png_count}/{args.num_frames}")
+                skip_video = False
+            
+            if args.save_extra and not os.path.exists(os.path.join(uniform_dir, "uniform_predictions.pt")):
+                anomalies.append(f"Uniform: predictions.pt missing")
+                skip_video = False
+        else:
+            anomalies.append(f"Uniform: dir not found")
+            skip_video = False
+    
+    # Check temporal merge aware uniform sampling
+    if args.sampling_type == "mergeaware_uniform":
+        uniform_dir = os.path.join(args.output_folder, video_name)
+        metadata_path = os.path.join(uniform_dir, "selected_frames.json")
+        
+        if os.path.exists(uniform_dir):
+            png_files = glob(os.path.join(uniform_dir, "*.png"))
+            png_count = len(png_files)
+            if png_count != args.num_frames:
+                anomalies.append(f"TempMergeUniform: PNG count {png_count}/{args.num_frames}")
+                skip_video = False
+            
+            metadata_valid = False
+            if os.path.exists(metadata_path):
+                try:
+                    with open(metadata_path, 'r') as f:
+                        metadata = json.load(f)
+                    if metadata.get("num_frames") == args.num_frames:
+                        metadata_valid = True
+                except (json.JSONDecodeError, KeyError):
+                    pass
+            
+            if not metadata_valid:
+                anomalies.append(f"TempMergeUniform: metadata invalid")
+                skip_video = False
+            
+            if args.save_extra and not os.path.exists(os.path.join(uniform_dir, "uniform_predictions.pt")):
+                anomalies.append(f"TempMergeUniform: predictions.pt missing")
+                skip_video = False
+        else:
+            anomalies.append(f"TempMergeUniform: dir not found")
+            skip_video = False
+    
+    # Check temporal merge aware SA sampling
+    if args.sampling_type == "mergeaware_sa":
+        sa_dir = os.path.join(args.output_folder, video_name)
+        metadata_path = os.path.join(sa_dir, "selected_frames.json")
+        
+        if os.path.exists(sa_dir):
+            png_files = glob(os.path.join(sa_dir, "*.png"))
+            png_count = len(png_files)
+            if png_count != args.num_frames:
+                anomalies.append(f"TempMergeSA: PNG count {png_count}/{args.num_frames}")
+                skip_video = False
+            
+            metadata_valid = False
+            if os.path.exists(metadata_path):
+                try:
+                    with open(metadata_path, 'r') as f:
+                        metadata = json.load(f)
+                    if metadata.get("num_frames") == args.num_frames:
+                        metadata_valid = True
+                except (json.JSONDecodeError, KeyError):
+                    pass
+            
+            if not metadata_valid:
+                anomalies.append(f"TempMergeSA: metadata invalid")
+                skip_video = False
+            
+            if args.save_extra and not os.path.exists(os.path.join(sa_dir, "sa_predictions.pt")):
+                anomalies.append(f"TempMergeSA: predictions.pt missing")
+                skip_video = False
+        else:
+            anomalies.append(f"TempMergeSA: dir not found")
+            skip_video = False
+    
+    return skip_video, anomalies
+
+
+def extract_initial_frames_from_video(vr, tmp_dir, sample_count=128):
+    """
+    Extract initial frames uniformly from video.
+    
+    Returns:
+        tuple: (frame_indices, num_frames) where frame_indices is the array of extracted frame indices
+    """
+    num_frames = len(vr)
+    if num_frames == 0:
+        raise ValueError(f"No frames found in video")
+    
+    sample_count = min(sample_count, num_frames)
+    frame_indices = np.linspace(0, num_frames - 1, num=sample_count, dtype=int)
+    
+    for i, frame_idx in enumerate(frame_indices):
+        frame = vr[frame_idx].asnumpy()
+        image = Image.fromarray(frame)
+        frame_path = tmp_dir / f"frame_{frame_idx:04d}.png"
+        image.save(frame_path)
+    
+    return frame_indices, num_frames
+
+
+def process_sa_sampling(device_id, video_name, tmp_dir, frame_indices, model, device, dtype, args):
+    """Process standard SA sampling."""
+    frame_image_paths = sorted(glob(str(tmp_dir / "*.png")))
+    images = load_and_preprocess_images(frame_image_paths).to(device, dtype=dtype)
+    K = min(args.num_frames, images.shape[0])
+    selected_frames, predictions = space_aware_frame_sampling(model, images, K, dtype)
+    print(f"[GPU {device_id}] Selected frames: {selected_frames}")
+
+    selected_original_indices = [int(frame_indices[idx]) for idx in selected_frames]
+
+    sa_dir = os.path.join(args.output_folder, video_name)
+    os.makedirs(sa_dir, exist_ok=True)
+    for orig_idx in selected_original_indices:
+        src_path = tmp_dir / f"frame_{orig_idx:04d}.png"
+        if not src_path.exists():
+            continue
+        dst_name = f"{video_name}_frame_{orig_idx:06d}.png"
+        dst_path = os.path.join(sa_dir, dst_name)
+        shutil.copy2(src_path, dst_path)
+
+    print(f"[GPU {device_id}] Saved {len(selected_original_indices)} selected frames to {sa_dir}")
+    
+    # Save metadata
+    metadata = {
+        "scene_name": video_name,
+        "selected_frames": [int(x) for x in selected_original_indices],
+        "selected_prediction_indices": [int(idx) for idx in selected_frames],
+        "num_frames": len(selected_original_indices)
+    }
+    metadata_path = os.path.join(sa_dir, f"selected_frames.json")
+    with open(metadata_path, 'w') as f:
+        json.dump(metadata, f, indent=2)
+
+    # Save predictions if requested
+    if args.save_extra:
+        sa_predictions_filtered = {k: predictions[k] for k in args.extra_list if k in predictions}
+        sa_predictions_path = os.path.join(sa_dir, f"sa_predictions.pt")
+        torch.save(sa_predictions_filtered, sa_predictions_path)
+        print(f"[GPU {device_id}] Saved SA predictions ({list(sa_predictions_filtered.keys())}) to {sa_predictions_path}")
+
+    # Create video if requested
+    if args.save_video:
+        sa_video_path = os.path.join(sa_dir, f"{video_name}_sa_sampling.mp4")
+        create_video_from_frames(sa_dir, sa_video_path, fps=1)
+
+
+def process_mergeaware_sa(device_id, video_name, tmp_dir, frame_indices, model, device, dtype, args):
+    """Process temporal merge aware SA sampling."""
+    frame_image_paths = sorted(glob(str(tmp_dir / "*.png")))
+    images = load_and_preprocess_images(frame_image_paths).to(device, dtype=dtype)
+    
+    # First do SA sampling with n_prime = n // 2
+    n_prime = args.num_frames // 2
+    K = min(n_prime, images.shape[0])
+    initial_selected_frames, predictions = space_aware_frame_sampling(model, images, K, dtype)
+    print(f"[GPU {device_id}] Initial SA selected frame indices in 128-pool: {initial_selected_frames}")
+    
+    # Add neighbor frames in index space (0-127)
+    selected_pool_indices = add_neighbor_frames(
+        initial_selected_frames,
+        args.neighbor_mode,
+        args.index_step_size,
+        len(frame_indices)
+    )
+    
+    print(f"[GPU {device_id}] Temporal merge aware SA: {len(initial_selected_frames)} initial pool indices -> {len(selected_pool_indices)} final pool indices")
+    print(f"[GPU {device_id}] Final pool indices: {selected_pool_indices}")
+    
+    # Map pool indices back to original video frame IDs
+    selected_original_indices = [int(frame_indices[idx]) for idx in selected_pool_indices]
+    initial_selected_original = [int(frame_indices[idx]) for idx in initial_selected_frames]
+    
+    print(f"[GPU {device_id}] Mapped to original frame IDs: {selected_original_indices}")
+
+    sa_dir = os.path.join(args.output_folder, video_name)
+    os.makedirs(sa_dir, exist_ok=True)
+    
+    # Save all frames
+    saved_count = 0
+    for orig_idx in selected_original_indices:
+        frame_path = tmp_dir / f"frame_{orig_idx:04d}.png"
+        if not frame_path.exists():
+            raise FileNotFoundError(
+                f"Frame {orig_idx} not found at {frame_path}. "
+                f"All frames should exist in 128-frame pool for mergeaware_sa mode. "
+                f"Pool indices: {selected_pool_indices}, Frame IDs: {selected_original_indices}"
+            )
+        
+        dst_name = f"{video_name}_frame_{orig_idx:06d}.png"
+        dst_path = os.path.join(sa_dir, dst_name)
+        shutil.copy2(frame_path, dst_path)
+        saved_count += 1
+
+    print(f"[GPU {device_id}] Saved {saved_count} temporal merge aware SA sampled frames to {sa_dir}")
+    
+    # Save metadata
+    metadata = {
+        "scene_name": video_name,
+        "selected_frames": [int(x) for x in selected_original_indices],
+        "initial_selected_frames": [int(x) for x in initial_selected_original],
+        "selected_pool_indices": [int(idx) for idx in selected_pool_indices],
+        "initial_pool_indices": [int(idx) for idx in initial_selected_frames],
+        "num_frames": len(selected_original_indices),
+        "sampling_type": "mergeaware_sa",
+        "neighbor_mode": args.neighbor_mode,
+        "index_step_size": args.index_step_size
+    }
+    metadata_path = os.path.join(sa_dir, f"selected_frames.json")
+    with open(metadata_path, 'w') as f:
+        json.dump(metadata, f, indent=2)
+    
+    # Save predictions if requested
+    if args.save_extra:
+        sa_predictions_filtered = {k: predictions[k] for k in args.extra_list if k in predictions}
+        sa_predictions_path = os.path.join(sa_dir, f"sa_predictions.pt")
+        torch.save(sa_predictions_filtered, sa_predictions_path)
+        print(f"[GPU {device_id}] Saved SA predictions ({list(sa_predictions_filtered.keys())}) to {sa_predictions_path}")
+    
+    # Create video if requested
+    if args.save_video:
+        sa_video_path = os.path.join(sa_dir, f"{video_name}_mergeaware_sa_sampling.mp4")
+        create_video_from_frames(sa_dir, sa_video_path, fps=1)
+
+
+def process_uniform_sampling(device_id, video_name, tmp_dir, frame_indices, args):
+    """Process standard uniform sampling."""
+    uniform_dir = os.path.join(args.output_folder, video_name)
+    os.makedirs(uniform_dir, exist_ok=True)
+    if len(frame_indices) <= args.num_frames:
+        sampled_indices = frame_indices
+    else:
+        sampled_indices = np.linspace(0, len(frame_indices) - 1, num=args.num_frames, dtype=int)
+        sampled_indices = frame_indices[sampled_indices]
+    for orig_idx in sampled_indices:
+        src_path = tmp_dir / f"frame_{orig_idx:04d}.png"
+        if not src_path.exists():
+            continue
+        dst_name = f"{video_name}_frame_{orig_idx:06d}.png"
+        dst_path = os.path.join(uniform_dir, dst_name)
+        shutil.copy2(src_path, dst_path)
+
+    print(f"[GPU {device_id}] Saved {len(sampled_indices)} uniform sampled frames to {uniform_dir}")
+
+
+def process_mergeaware_uniform(device_id, video_name, tmp_dir, frame_indices, vr, num_frames, model, device, dtype, args):
+    """Process temporal merge aware uniform sampling."""
+    uniform_dir = os.path.join(args.output_folder, video_name)
+    os.makedirs(uniform_dir, exist_ok=True)
+    
+    # First do uniform sampling with n_prime = n // 2
+    n_prime = args.num_frames // 2
+    if len(frame_indices) <= n_prime:
+        initial_sampled = frame_indices
+    else:
+        initial_sampled_local = np.linspace(0, len(frame_indices) - 1, num=n_prime, dtype=int)
+        initial_sampled = frame_indices[initial_sampled_local]
+    
+    # Add neighbor frames in frame ID space
+    sampled_indices = add_neighbor_frames(
+        initial_sampled, 
+        args.neighbor_mode, 
+        args.fid_step_size, 
+        num_frames
+    )
+    
+    print(f"[GPU {device_id}] Temporal merge aware uniform: {n_prime} initial frames -> {len(sampled_indices)} final frames")
+    print(f"[GPU {device_id}] Final sampled indices (frame IDs): {sampled_indices}")
+    
+    # Extract all needed frames from video
+    print(f"[GPU {device_id}] Extracting {len(sampled_indices)} frames from video...")
+    for orig_idx in sampled_indices:
+        frame_path = tmp_dir / f"frame_{orig_idx:04d}.png"
+        if not frame_path.exists():
+            frame = vr[orig_idx].asnumpy()
+            image = Image.fromarray(frame)
+            image.save(frame_path)
+    
+    # Copy all frames to output directory
+    saved_count = 0
+    for orig_idx in sampled_indices:
+        frame_path = tmp_dir / f"frame_{orig_idx:04d}.png"
+        if not frame_path.exists():
+            raise FileNotFoundError(f"Frame {orig_idx} not found at {frame_path} after extraction.")
+        
+        dst_name = f"{video_name}_frame_{orig_idx:06d}.png"
+        dst_path = os.path.join(uniform_dir, dst_name)
+        shutil.copy2(frame_path, dst_path)
+        saved_count += 1
+
+    print(f"[GPU {device_id}] Saved {saved_count} temporal merge aware uniform sampled frames to {uniform_dir}")
+    
+    # Save metadata
+    metadata = {
+        "scene_name": video_name,
+        "selected_frames": [int(x) for x in sampled_indices],
+        "initial_selected_frames": [int(x) for x in initial_sampled],
+        "num_frames": len(sampled_indices),
+        "sampling_type": "mergeaware_uniform",
+        "neighbor_mode": args.neighbor_mode,
+        "fid_step_size": args.fid_step_size
+    }
+    metadata_path = os.path.join(uniform_dir, f"selected_frames.json")
+    with open(metadata_path, 'w') as f:
+        json.dump(metadata, f, indent=2)
+
+    # Run VGGT inference and save predictions if requested
+    if args.save_extra:
+        uniform_frame_paths = sorted(glob(os.path.join(uniform_dir, "*.png")))
+        uniform_images = load_and_preprocess_images(uniform_frame_paths).to(device, dtype=dtype)
+        uniform_predictions = run_vggt_inference(model, uniform_images, dtype)
+        uniform_predictions_filtered = {k: uniform_predictions[k] for k in args.extra_list if k in uniform_predictions}
+        uniform_predictions_path = os.path.join(uniform_dir, f"uniform_predictions.pt")
+        torch.save(uniform_predictions_filtered, uniform_predictions_path)
+        print(f"[GPU {device_id}] Saved uniform predictions ({list(uniform_predictions_filtered.keys())}) to {uniform_predictions_path}")
+
+    # Create video if requested
+    if args.save_video:
+        uniform_video_path = os.path.join(uniform_dir, f"{video_name}_mergeaware_uniform_sampling.mp4")
+        create_video_from_frames(uniform_dir, uniform_video_path, fps=1)
+
+
 def process_videos_on_device(device_id, video_paths, args):
+    """
+    Process videos on a specific GPU device.
+    
+    Refactored for clarity: main logic delegates to helper functions.
+    """
     if not video_paths:
         return
 
     os.environ["CUDA_VISIBLE_DEVICES"] = str(device_id)
     
-    # Clean up stale temporary directories from previous runs
+    # Clean up stale temporary directories
     tmp_base = tempfile.gettempdir()
     stale_dirs = glob(os.path.join(tmp_base, "sw_sampling_*"))
     if stale_dirs:
@@ -320,10 +782,10 @@ def process_videos_on_device(device_id, video_paths, args):
             except Exception as e:
                 print(f"[GPU {device_id}] Warning: Could not remove {stale_dir}: {e}")
 
-    # JJ : Skip model loading in dry run mode or uniform-only sampling (unless save_extra needs VGGT)
+    # Load model if needed
     device = "cuda"
     dtype = torch.bfloat16
-    need_vggt = args.sampling_type in ["both", "sa"] or args.save_extra
+    need_vggt = args.sampling_type in ["both", "sa", "mergeaware_sa"] or args.save_extra
     if not args.dry_run and need_vggt:
         model = VGGT.from_pretrained(args.model_path).to(device)
     else:
@@ -335,74 +797,13 @@ def process_videos_on_device(device_id, video_paths, args):
     process_videos = 0
 
     for video_path in tqdm(video_paths, desc=f"GPU {device_id} processing videos"):
-        # NOTE JJ: Check if video has already been processed, skip if it has been processed
-        # ////////////////////////////////////////////////////////////////
-        # Check if video has already been processed, skip if it has been processed
+        # Check if video has already been processed
         video_name = Path(video_path).stem
-        skip_video = True
-        anomalies = []
-        
-        # Check space-aware sampling
-        if args.sampling_type in ["both", "sa"]:
-            sa_dir = os.path.join(args.output_folder, video_name)
-            metadata_path = os.path.join(sa_dir, "selected_frames.json")
-            
-            if os.path.exists(sa_dir):
-                # Count actual PNG files
-                png_files = glob(os.path.join(sa_dir, "*.png"))
-                png_count = len(png_files)
-                
-                # Check metadata
-                metadata_valid = False
-                if os.path.exists(metadata_path):
-                    try:
-                        with open(metadata_path, 'r') as f:
-                            metadata = json.load(f)
-                        if metadata.get("num_frames") == args.num_frames:
-                            metadata_valid = True
-                    except (json.JSONDecodeError, KeyError):
-                        pass
-                
-                # Both PNG count and metadata must be correct
-                if png_count != args.num_frames:
-                    anomalies.append(f"SA: PNG count {png_count}/{args.num_frames}")
-                    skip_video = False
-                elif not metadata_valid:
-                    anomalies.append(f"SA: metadata invalid")
-                    skip_video = False
-                
-                # JJ : Check SA predictions .pt when save_extra is enabled
-                if args.save_extra and not os.path.exists(os.path.join(sa_dir, "sa_predictions.pt")):
-                    anomalies.append(f"SA: predictions.pt missing")
-                    skip_video = False
-            else:
-                anomalies.append(f"SA: dir not found")
-                skip_video = False
-        
-        # Check uniform sampling
-        if args.sampling_type in ["both", "uniform"]:
-            uniform_dir = os.path.join(args.output_folder, video_name)
-            
-            if os.path.exists(uniform_dir):
-                # Count PNG files to verify completion
-                png_files = glob(os.path.join(uniform_dir, "*.png"))
-                png_count = len(png_files)
-                if png_count != args.num_frames:
-                    anomalies.append(f"Uniform: PNG count {png_count}/{args.num_frames}")
-                    skip_video = False
-                
-                # JJ : Check uniform predictions .pt when save_extra is enabled
-                if args.save_extra and not os.path.exists(os.path.join(uniform_dir, "uniform_predictions.pt")):
-                    anomalies.append(f"Uniform: predictions.pt missing")
-                    skip_video = False
-            else:
-                anomalies.append(f"Uniform: dir not found")
-                skip_video = False
+        skip_video, anomalies = check_video_completion(video_name, args)
         
         if skip_video:
             skipped_videos += 1
-            # print(f"[GPU {device_id}] ✓ SKIP: {video_name}")
-            continue # JJ: comment out to overwrite
+            continue
         else:
             process_videos += 1
             print(f"[GPU {device_id}] ✗ PROCESS: {video_name} - {', '.join(anomalies)}")
@@ -410,7 +811,6 @@ def process_videos_on_device(device_id, video_paths, args):
         # Dry run mode: skip all actual processing
         if args.dry_run:
             continue
-        # ////////////////////////////////////////////////////////////////
         
         # Only anomaly videos reach here - start actual inference
         print(f"[GPU {device_id}] Starting inference for {video_name}...")
@@ -418,103 +818,24 @@ def process_videos_on_device(device_id, video_paths, args):
         
         try:
             vr = VideoReader(video_path, ctx=cpu(0))
-            num_frames = len(vr)
-
-            if num_frames == 0:
-                raise ValueError(f"No frames found in video: {video_path}")
-
-            sample_count = min(128, num_frames)
-            frame_indices = np.linspace(0, num_frames - 1, num=sample_count, dtype=int)
-
-            for i, frame_idx in enumerate(frame_indices):
-                frame = vr[frame_idx].asnumpy()
-                image = Image.fromarray(frame)
-                frame_path = tmp_dir / f"frame_{frame_idx:04d}.png"
-                image.save(frame_path)
-
+            frame_indices, num_frames = extract_initial_frames_from_video(vr, tmp_dir, sample_count=128)
             print(f"[GPU {device_id}] Saved {len(frame_indices)} frames to {tmp_dir}")
 
 
-            # JJ : Only run SA inference when needed
-            # Space-aware sampling
+            # Process sampling based on type
             if args.sampling_type in ["both", "sa"]:
-                frame_image_paths = sorted(glob(str(tmp_dir / "*.png")))
-                images = load_and_preprocess_images(frame_image_paths).to(device, dtype=dtype)
-                K = min(args.num_frames, images.shape[0])
-                selected_frames, predictions = space_aware_frame_sampling(model, images, K, dtype)
-                print(f"[GPU {device_id}] Selected frames: {selected_frames}")
-
-                selected_original_indices = [int(frame_indices[idx]) for idx in selected_frames]
-
-                sa_dir = os.path.join(args.output_folder, video_name)
-                os.makedirs(sa_dir, exist_ok=True)
-                for orig_idx in selected_original_indices:
-                    src_path = tmp_dir / f"frame_{orig_idx:04d}.png"
-                    if not src_path.exists():
-                        continue
-                    dst_name = f"{video_name}_frame_{orig_idx:06d}.png"
-                    dst_path = os.path.join(sa_dir, dst_name)
-                    shutil.copy2(src_path, dst_path)
-
-                print(f"[GPU {device_id}] Saved {len(selected_original_indices)} selected frames to {sa_dir}")
-
-                # Save selected frames metadata
-                # JJ : Also save prediction tensor indices for mapping back to predictions dict
-                metadata = {
-                    "scene_name": video_name,
-                    "selected_frames": selected_original_indices,
-                    "selected_prediction_indices": [int(idx) for idx in selected_frames],
-                    "num_frames": len(selected_original_indices)
-                }
-                metadata_path = os.path.join(sa_dir, f"selected_frames.json")
-                with open(metadata_path, 'w') as f:
-                    json.dump(metadata, f, indent=2)
-
-                # JJ : Save filtered predictions dict as .pt when save_extra is enabled (SA mode)
-                if args.save_extra:
-                    sa_predictions_filtered = {k: predictions[k] for k in args.extra_list if k in predictions}
-                    sa_predictions_path = os.path.join(sa_dir, f"sa_predictions.pt")
-                    torch.save(sa_predictions_filtered, sa_predictions_path)
-                    print(f"[GPU {device_id}] Saved SA predictions ({list(sa_predictions_filtered.keys())}) to {sa_predictions_path}")
-
-                # Create video from space-aware sampled frames if requested
-                if args.save_video:
-                    sa_video_path = os.path.join(sa_dir, f"{video_name}_sa_sampling.mp4")
-                    create_video_from_frames(sa_dir, sa_video_path, fps=1)
+                process_sa_sampling(device_id, video_name, tmp_dir, frame_indices, model, device, dtype, args)
+            
+            elif args.sampling_type == "mergeaware_sa":
+                process_mergeaware_sa(device_id, video_name, tmp_dir, frame_indices, model, device, dtype, args)
 
             # Uniform sampling
             if args.sampling_type in ["both", "uniform"]:
-                uniform_dir = os.path.join(args.output_folder, video_name)
-                os.makedirs(uniform_dir, exist_ok=True)
-                if len(frame_indices) <= args.num_frames:
-                    sampled_indices = frame_indices
-                else:
-                    sampled_indices = np.linspace(0, len(frame_indices) - 1, num=args.num_frames, dtype=int)
-                    sampled_indices = frame_indices[sampled_indices]
-                for orig_idx in sampled_indices:
-                    src_path = tmp_dir / f"frame_{orig_idx:04d}.png"
-                    if not src_path.exists():
-                        continue
-                    dst_name = f"{video_name}_frame_{orig_idx:06d}.png"
-                    dst_path = os.path.join(uniform_dir, dst_name)
-                    shutil.copy2(src_path, dst_path)
-
-                print(f"[GPU {device_id}] Saved {len(sampled_indices)} uniform sampled frames to {uniform_dir}")
-
-                # JJ : Run VGGT inference on uniform frames and save filtered predictions when save_extra
-                if args.save_extra:
-                    uniform_frame_paths = sorted(glob(os.path.join(uniform_dir, "*.png")))
-                    uniform_images = load_and_preprocess_images(uniform_frame_paths).to(device, dtype=dtype)
-                    uniform_predictions = run_vggt_inference(model, uniform_images, dtype)
-                    uniform_predictions_filtered = {k: uniform_predictions[k] for k in args.extra_list if k in uniform_predictions}
-                    uniform_predictions_path = os.path.join(uniform_dir, f"uniform_predictions.pt")
-                    torch.save(uniform_predictions_filtered, uniform_predictions_path)
-                    print(f"[GPU {device_id}] Saved uniform predictions ({list(uniform_predictions_filtered.keys())}) to {uniform_predictions_path}")
-
-                # Create video from uniform sampled frames if requested
-                if args.save_video:
-                    uniform_video_path = os.path.join(uniform_dir, f"{video_name}_uniform_sampling.mp4")
-                    create_video_from_frames(uniform_dir, uniform_video_path, fps=1)
+                process_uniform_sampling(device_id, video_name, tmp_dir, frame_indices, args)
+            
+            # Temporal merge aware uniform sampling
+            elif args.sampling_type == "mergeaware_uniform":
+                process_mergeaware_uniform(device_id, video_name, tmp_dir, frame_indices, vr, num_frames, model, device, dtype, args)
         
         except Exception as e:
             print(f"[GPU {device_id}] Error processing {video_name}: {e}")
@@ -542,14 +863,23 @@ if __name__ == "__main__":
     parser.add_argument("--output_folder", type=str, required=True, help="Path to the output folder for selected frames.")
     parser.add_argument("--num_frames", type=int, default=16, help="Number of frames to sample using space-aware sampling.")
     parser.add_argument("--save_video", action="store_true", help="Save a video with fps=1 from the sampled frames.")
-    parser.add_argument("--sampling_type", type=str, default="both", choices=["both", "sa", "uniform"], 
-                        help="Type of sampling to perform: 'both' (default), 'sa' (space-aware only), or 'uniform' (uniform only).")
+    parser.add_argument("--sampling_type", type=str, default="both", 
+                        choices=["both", "sa", "uniform", "mergeaware_uniform", "mergeaware_sa"], 
+                        help="Type of sampling to perform: 'both' (default), 'sa' (space-aware only), 'uniform' (uniform only), "
+                             "'mergeaware_uniform', or 'mergeaware_sa'.")
     parser.add_argument("--save_extra", action="store_true", help="Save VGGT predictions dict as .pt alongside sampled frames.")
     # JJ : Specify which prediction keys to save
     parser.add_argument("--extra_list", type=str, nargs="+",
                         default=["depth", "depth_conf", "world_points", "world_points_conf", "extrinsic", "intrinsic"],
                         help="List of prediction keys to save when --save_extra is enabled.")
     parser.add_argument("--dry_run", action="store_true", help="Dry run mode: only check and report anomalies, no actual processing.")
+    # JJ : Temporal merge aware sampling parameters
+    parser.add_argument("--neighbor_mode", type=str, default="after", choices=["before", "after", "random"],
+                        help="How to add neighbor frames: 'before' (frame-step), 'after' (frame+step), 'random' (randomly choose).")
+    parser.add_argument("--fid_step_size", type=int, default=30,
+                        help="Frame ID step size for mergeaware_uniform (operates on original video frame IDs).")
+    parser.add_argument("--index_step_size", type=int, default=1,
+                        help="Index step size for mergeaware_sa (operates on 128-frame pool indices).")
     args = parser.parse_args()
 
     n_gpu = torch.cuda.device_count()
@@ -574,13 +904,30 @@ if __name__ == "__main__":
         else:
             num_frames_str = f"{args.num_frames}f"
         
+        # JJ : Build sampling directory name with temporal merge aware parameters
         # Determine sampling type from output_folder or use args.sampling_type
-        if "sa_sampling" in args.output_folder:
+        # Check more specific patterns first (mergeaware before sa/uniform)
+        if "mergeaware_sa_sampling" in args.output_folder or args.sampling_type == "mergeaware_sa":
+            sampling_dir = f"mergeaware_sa_sampling_{num_frames_str}"
+        elif "mergeaware_uniform_sampling" in args.output_folder or args.sampling_type == "mergeaware_uniform":
+            sampling_dir = f"mergeaware_uniform_sampling_{num_frames_str}"
+        elif "sa_sampling" in args.output_folder:
             sampling_dir = f"sa_sampling_{num_frames_str}"
         elif "uniform_sampling" in args.output_folder:
             sampling_dir = f"uniform_sampling_{num_frames_str}"
         else:
             sampling_dir = f"{args.sampling_type}_sampling_{num_frames_str}"
+        
+        # Add neighbor_mode and step_size suffix for temporal merge aware modes
+        if args.sampling_type == "mergeaware_uniform":
+            # Abbreviate neighbor_mode: before->bef, after->aft, random->rnd
+            nbr_abbrev = {"before": "bef", "after": "aft", "random": "rnd"}
+            nbr_str = nbr_abbrev.get(args.neighbor_mode, args.neighbor_mode)
+            sampling_dir = f"{sampling_dir}_nbr{nbr_str}_fidss{args.fid_step_size}"
+        elif args.sampling_type == "mergeaware_sa":
+            nbr_abbrev = {"before": "bef", "after": "aft", "random": "rnd"}
+            nbr_str = nbr_abbrev.get(args.neighbor_mode, args.neighbor_mode)
+            sampling_dir = f"{sampling_dir}_nbr{nbr_str}_idxss{args.index_step_size}"
 
         # udpate the single video output folder
         dir_sampling_dir, dataset_name = os.path.dirname(args.output_folder), os.path.basename(args.output_folder)
