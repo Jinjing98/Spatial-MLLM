@@ -550,15 +550,20 @@ def process_sa_sampling(device_id, video_name, tmp_dir, frame_indices, model, de
 
     sa_dir = os.path.join(args.output_folder, video_name)
     os.makedirs(sa_dir, exist_ok=True)
+    saved_count = 0
     for orig_idx in selected_original_indices:
         src_path = tmp_dir / f"frame_{orig_idx:04d}.png"
         if not src_path.exists():
-            continue
+            raise FileNotFoundError(
+                f"Frame {orig_idx} not found at {src_path}. "
+                f"Should exist in 128-frame pool for SA sampling."
+            )
         dst_name = f"{video_name}_frame_{orig_idx:06d}.png"
         dst_path = os.path.join(sa_dir, dst_name)
         shutil.copy2(src_path, dst_path)
+        saved_count += 1
 
-    print(f"[GPU {device_id}] Saved {len(selected_original_indices)} selected frames to {sa_dir}")
+    print(f"[GPU {device_id}] Saved {saved_count} selected frames to {sa_dir}")
     
     # Save metadata
     metadata = {
@@ -671,15 +676,21 @@ def process_uniform_sampling(device_id, video_name, tmp_dir, frame_indices, args
     else:
         sampled_indices = np.linspace(0, len(frame_indices) - 1, num=args.num_frames, dtype=int)
         sampled_indices = frame_indices[sampled_indices]
+    
+    saved_count = 0
     for orig_idx in sampled_indices:
         src_path = tmp_dir / f"frame_{orig_idx:04d}.png"
         if not src_path.exists():
-            continue
+            raise FileNotFoundError(
+                f"Frame {orig_idx} not found at {src_path}. "
+                f"Should exist in 128-frame pool for uniform sampling."
+            )
         dst_name = f"{video_name}_frame_{orig_idx:06d}.png"
         dst_path = os.path.join(uniform_dir, dst_name)
         shutil.copy2(src_path, dst_path)
+        saved_count += 1
 
-    print(f"[GPU {device_id}] Saved {len(sampled_indices)} uniform sampled frames to {uniform_dir}")
+    print(f"[GPU {device_id}] Saved {saved_count} uniform sampled frames to {uniform_dir}")
 
 
 def process_mergeaware_uniform(device_id, video_name, tmp_dir, frame_indices, vr, num_frames, model, device, dtype, args):
@@ -807,6 +818,12 @@ def process_videos_on_device(device_id, video_paths, args):
         else:
             process_videos += 1
             print(f"[GPU {device_id}] ✗ PROCESS: {video_name} - {', '.join(anomalies)}")
+            
+            # JJ : Clean up incomplete output directory to ensure fresh start
+            output_dir = os.path.join(args.output_folder, video_name)
+            if os.path.exists(output_dir):
+                shutil.rmtree(output_dir)
+                print(f"[GPU {device_id}] Removed incomplete output: {output_dir}")
         
         # Dry run mode: skip all actual processing
         if args.dry_run:
