@@ -12,7 +12,13 @@ from .aggregator import Aggregator
 from ..heads.camera_head import CameraHead
 from ..heads.dpt_head import DPTHead
 from ..heads.track_head import TrackHead
-from transformers.modeling_utils import get_parameter_dtype
+# JJ : compatible with both old and new transformers versions
+try:
+    # 'old transformers version'
+    from transformers.modeling_utils import get_parameter_dtype
+except ImportError:
+    # 'transformers 5.x'
+    get_parameter_dtype = None
 
 class VGGT(nn.Module, PyTorchModelHubMixin):
     def __init__(self, img_size=518, patch_size=14, embed_dim=1024):
@@ -29,7 +35,9 @@ class VGGT(nn.Module, PyTorchModelHubMixin):
         """
         `torch.dtype`: The dtype of the module (assuming that all the module parameters have the same dtype).
         """
-        return get_parameter_dtype(self)
+        if get_parameter_dtype is not None:
+            return get_parameter_dtype(self)
+        return next(self.parameters()).dtype
     
     def forward(
         self,
