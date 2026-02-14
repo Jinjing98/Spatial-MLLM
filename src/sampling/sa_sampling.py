@@ -12,6 +12,7 @@ import json
 import shutil
 import tempfile
 from glob import glob
+import warnings
 
 import numpy as np
 import torch
@@ -233,13 +234,16 @@ def add_neighbor_frames(sampled_indices, neighbor_mode, step_size, total_frames,
         if mode == "before":
             neighbor_idx = frame_idx - step_size
             
-            # Check overflow: out of bounds or overlaps with previous sampled frame
+            # JJ: Check overflow: out of bounds or overlaps with previous sampled frame
+            # If overflow occurs, reuse the current frame instead of raising error
             if neighbor_idx < 0:
-                raise ValueError(f"Neighbor frame {neighbor_idx} < 0 for frame {frame_idx}. "
-                               f"Cannot add neighbor with step_size={step_size} in 'before' mode.")
+                warnings.warn(f"Neighbor frame {neighbor_idx} < 0 for frame {frame_idx}. "
+                            f"Reusing frame {frame_idx} instead (step_size={step_size} in 'before' mode).")
+                neighbor_idx = frame_idx
             elif i > 0 and neighbor_idx <= sampled_indices[i-1]:
-                raise ValueError(f"Neighbor frame {neighbor_idx} overlaps with previous frame {sampled_indices[i-1]} "
-                               f"for frame {frame_idx}. Increase frame spacing or decrease step_size.")
+                warnings.warn(f"Neighbor frame {neighbor_idx} overlaps with previous frame {sampled_indices[i-1]} "
+                            f"for frame {frame_idx}. Reusing frame {frame_idx} instead.")
+                neighbor_idx = frame_idx
             
             # Add in order: [neighbor, frame]
             final_indices.extend([neighbor_idx, frame_idx])
@@ -247,13 +251,16 @@ def add_neighbor_frames(sampled_indices, neighbor_mode, step_size, total_frames,
         else:  # mode == "after"
             neighbor_idx = frame_idx + step_size
             
-            # Check overflow: out of bounds or overlaps with next sampled frame
+            # JJ: Check overflow: out of bounds or overlaps with next sampled frame
+            # If overflow occurs, reuse the current frame instead of raising error
             if neighbor_idx >= total_frames:
-                raise ValueError(f"Neighbor frame {neighbor_idx} >= total_frames {total_frames} for frame {frame_idx}. "
-                               f"Cannot add neighbor with step_size={step_size} in 'after' mode.")
+                warnings.warn(f"Neighbor frame {neighbor_idx} >= total_frames {total_frames} for frame {frame_idx}. "
+                            f"Reusing frame {frame_idx} instead (step_size={step_size} in 'after' mode).")
+                neighbor_idx = frame_idx
             elif i < len(sampled_indices) - 1 and neighbor_idx >= sampled_indices[i+1]:
-                raise ValueError(f"Neighbor frame {neighbor_idx} overlaps with next frame {sampled_indices[i+1]} "
-                               f"for frame {frame_idx}. Increase frame spacing or decrease step_size.")
+                warnings.warn(f"Neighbor frame {neighbor_idx} overlaps with next frame {sampled_indices[i+1]} "
+                            f"for frame {frame_idx}. Reusing frame {frame_idx} instead.")
+                neighbor_idx = frame_idx
             
             # Add in order: [frame, neighbor]
             final_indices.extend([frame_idx, neighbor_idx])
@@ -620,8 +627,9 @@ def process_mergeaware_sa(device_id, video_name, tmp_dir, frame_indices, model, 
     sa_dir = os.path.join(args.output_folder, video_name)
     os.makedirs(sa_dir, exist_ok=True)
     
-    # Save all frames
+    # JJ: Save all frames, handle duplicate indices by adding suffix
     saved_count = 0
+    frame_occurrence_count = {}
     for orig_idx in selected_original_indices:
         frame_path = tmp_dir / f"frame_{orig_idx:04d}.png"
         if not frame_path.exists():
@@ -631,7 +639,18 @@ def process_mergeaware_sa(device_id, video_name, tmp_dir, frame_indices, model, 
                 f"Pool indices: {selected_pool_indices}, Frame IDs: {selected_original_indices}"
             )
         
-        dst_name = f"{video_name}_frame_{orig_idx:06d}.png"
+        # Track occurrence count for duplicate frames
+        if orig_idx not in frame_occurrence_count:
+            frame_occurrence_count[orig_idx] = 0
+        else:
+            frame_occurrence_count[orig_idx] += 1
+        
+        # Add suffix for duplicate frames
+        if frame_occurrence_count[orig_idx] == 0:
+            dst_name = f"{video_name}_frame_{orig_idx:06d}.png"
+        else:
+            dst_name = f"{video_name}_frame_{orig_idx:06d}_{frame_occurrence_count[orig_idx] + 1}.png"
+        
         dst_path = os.path.join(sa_dir, dst_name)
         shutil.copy2(frame_path, dst_path)
         saved_count += 1
@@ -726,14 +745,26 @@ def process_mergeaware_uniform(device_id, video_name, tmp_dir, frame_indices, vr
             image = Image.fromarray(frame)
             image.save(frame_path)
     
-    # Copy all frames to output directory
+    # JJ: Copy all frames to output directory, handle duplicate indices by adding suffix
     saved_count = 0
+    frame_occurrence_count = {}
     for orig_idx in sampled_indices:
         frame_path = tmp_dir / f"frame_{orig_idx:04d}.png"
         if not frame_path.exists():
             raise FileNotFoundError(f"Frame {orig_idx} not found at {frame_path} after extraction.")
         
-        dst_name = f"{video_name}_frame_{orig_idx:06d}.png"
+        # Track occurrence count for duplicate frames
+        if orig_idx not in frame_occurrence_count:
+            frame_occurrence_count[orig_idx] = 0
+        else:
+            frame_occurrence_count[orig_idx] += 1
+        
+        # Add suffix for duplicate frames
+        if frame_occurrence_count[orig_idx] == 0:
+            dst_name = f"{video_name}_frame_{orig_idx:06d}.png"
+        else:
+            dst_name = f"{video_name}_frame_{orig_idx:06d}_{frame_occurrence_count[orig_idx] + 1}.png"
+        
         dst_path = os.path.join(uniform_dir, dst_name)
         shutil.copy2(frame_path, dst_path)
         saved_count += 1
