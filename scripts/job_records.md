@@ -1,17 +1,56 @@
+15.02:
+2844442 mergeaware_sa_f16
+tood:
+eval 
+
+14.02:
+
+
+
+todo:
+eval 16 32
+2841955 mergeaware_uniform 16
+2841956 mergeaware_uniform 32
+
+gen:
+2839266 16: mergeaware_uniform  scannetpp
+2839356 32: mergeaware_uniform  scannet
+
+eval:
+2838125 mergeaware_sa_f8
+2838126 mergeaware_sa_f16
+2838128 mergeaware_sa_f32
+2838117 sa8
+
+eval: merge_uni_f8
+2835055
+
 13.02:
 gen the mergeaware_sa/mergeaware_uniform
-mergeaware_sa: 
-8 2828004
-16  2828006
-32 2828008
+mergeaware_sa: the ratio of the overlapp are linear increase with nframes increase. check the .err can do stats on it. 
+D 8 2834355 2828004
+D 16 2834358  2828006
+D 32 2834360 2828008
 mergeaware_uniform: 
-8 2828009
-16 2828010
-32 2828011
+D: 8 2828009
+X 16 2834364 2828010
+X 32 2834365 2828011
+mergeaware_uniform failed since one sample failed:
+16: (infact it is the 1st sample in scannetpp)
+09c1414f1b
+scannetpp
+FileNotFoundError: [Errno 2] No such file or directory: '/tmp/sw_sampling_09c1414f1b_gpu0_jf8y3d91/frame_1287.png'
+[GPU 0] Error processing 09c1414f1b: [Errno 2] No such file or directory: '/tmp/sw_sampling_09c1414f1b_gpu0_jf8y3d91/frame_1287.png'
+
+32:(failed since scene0697_01)
+scannet
+scene0697_01
+FileNotFoundError: [Errno 2] No such file or directory: '/tmp/sw_sampling_scene0697_01_gpu0_pw7ojscb/frame_1751.png'
+/data/horse/ws/jixu233b-metadata_ws/datasets/vsibench/mergeaware_uniform_sampling_32f_rnd_fidss30/scannet/scene0697_01
 
 12.02
 #eval qwen3vl with video input for frames num on sa
-sa8 2828052 2808207
+sa8 2834638 2828052 2808207
 sa16 2808218 2804290
 sa32 2804296
 
@@ -21,7 +60,7 @@ f16 2804235
 f32 2804225
 
 #Gen sa samples cam pose and other meta
-2828283 2823358(sa only) 2803812 f8_both extra
+2835137 2828283 2823358(sa only) 2803812 f8_both extra
 2803826 f16_both extra
 2806350 f32_both extra
 

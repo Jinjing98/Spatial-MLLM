@@ -1,8 +1,18 @@
 #!/bin/bash
 
-cd /mnt/cluster/workspaces/jinjingxu/proj/vlm/SpatialMllmHallucinate/third_party/Spatial-MLLM/previous_version/src
+# LOCALLY VIS:
+# (base) jinjingxu@G27LP0076-Linux:~$ ssh -L 8008:localhost:8008 current_computation_node
 
-source activate /mnt/cluster/environments/jinjingxu/pkg/envs/transformers_latest
+
+# cd  third_party/Spatial-MLLM/previous_version/src
+cd Spatial-MLLM/previous_version/src
+
+# activate conda
+source /software/rapids/r24.10/Anaconda3/2024.02-1/etc/profile.d/conda.sh
+# conda activate /data/horse/ws/jixu233b-3d_ws/envs/spatial-mllm
+conda activate /data/horse/ws/jixu233b-3d_ws/envs/transformers_v5
+module load CUDA/12.4.0 # nvcc
+
 
 # ==============================================================================
 # INTERACTIVE MODE: Launch GUI for uploading and visualizing

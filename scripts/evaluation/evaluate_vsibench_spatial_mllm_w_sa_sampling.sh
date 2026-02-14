@@ -41,14 +41,6 @@ mkdir -p $TRITON_CACHE_DIR
 # Print current directory
 pwd
 
-# Use absolute path for output to avoid permission issues
-OUTPUT_ROOT="${RESULTS_SAVE_ROOT}/results/vsibench-sa-sampling"
-mkdir -p "$OUTPUT_ROOT"
-
-# OUTPUT_ROOT="results/vsibench"
-# mkdir -p "$OUTPUT_ROOT"
-
-
 DATASET_LIST=(
     "arkitscenes"
     "scannet"
@@ -124,7 +116,22 @@ SCENE_NAME_LIST=()  # By default, empty array means all scenes will be evaluated
 
 for nframe in "${nframes[@]}"; do
     TIMESTAMP=$(date +"%Y%m%d_%H%M%S")
-    
+
+    # JJ
+    SAMPLING='sa_sampling'
+    MERGEAWARE_DETAILS=''
+    # SAMPLING='uniform_sampling'
+    # MERGEAWARE_DETAILS=''
+    SAMPLING='mergeaware_uniform_sampling'
+    MERGEAWARE_DETAILS='_rnd_fidss30'
+    # SAMPLING='mergeaware_sa_sampling'
+    # MERGEAWARE_DETAILS='_rnd_idxss1'
+
+
+    OUTPUT_ROOT="${RESULTS_SAVE_ROOT}/results/vsibench_${SAMPLING}"
+    mkdir -p "$OUTPUT_ROOT"
+    VIDEO_DIR="${DATA_ROOT}/vsibench/${SAMPLING}_${nframe}f${MERGEAWARE_DETAILS}" 
+
     # Build dataset suffix
     DATASET_SUFFIX=""
     if [ ${#DATASETS[@]} -ne ${#DATASET_LIST[@]} ]; then
@@ -168,7 +175,7 @@ for nframe in "${nframes[@]}"; do
         --annotation_dir "${DATA_ROOT}/vsibench" \
         --question_types ${QUESTION_TYPES[@]} \
         --datasets ${DATASETS[@]} \
-        --video_dir "${DATA_ROOT}/vsibench/sa_sampling_${nframe}f" \
+        --video_dir "${VIDEO_DIR}" \
         --batch_size 1 \
         --output_dir "$EXP_DIR" \
         --output_name "eval_result" \
