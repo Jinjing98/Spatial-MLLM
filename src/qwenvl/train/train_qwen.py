@@ -193,30 +193,58 @@ def train(attn_implementation="flash_attention_2"):
     )
     set_model(model_args, model)
 
-    # print trainable parameters
+    # JJ : Print module-level trainable parameters status
     model.visual.print_trainable_parameters()
     model.model.print_trainable_parameters()
     if hasattr(model, "spatial_encoder"):
         model.spatial_encoder.print_trainable_parameters()
     if hasattr(model, "connector"):
         model.connector.print_trainable_parameters()
-    total = sum(p.numel() for p in model.parameters())
-    trainable = sum(p.numel() for p in model.parameters() if p.requires_grad)
-    print(f"Total parameters: {total:,}")
-    print(f"Trainable parameters: {trainable:,}")
 
     data_module = make_supervised_data_module(tokenizer=tokenizer, data_args=data_args)
     trainer = Trainer(
         model=model, processing_class=tokenizer, args=training_args, **data_module
     )
+    
+    # JJ : Print total parameters count after Trainer initialization
+    # Note: Must be done after Trainer init because DeepSpeed ZeRO-3 wraps the model
+    # and parameters are not fully accessible before that
+    total = sum(p.numel() for p in trainer.model.parameters())
+    trainable = sum(p.numel() for p in trainer.model.parameters() if p.requires_grad)
+    print(f"Total parameters: {total:,}")
+    print(f"Trainable parameters: {trainable:,}")
 
     trainer.train()
 
     trainer.save_state()
 
-    source_path = os.path.join(model_args.pretrained_model_name_or_path, "chat_template.json")
-    template_path = os.path.join(training_args.output_dir, "chat_template.json")
-    shutil.copy2(source_path, template_path)
+    # JJ : Handle HuggingFace model path for chat_template.json
+    # Previous version (only works for local paths):
+    # source_path = os.path.join(model_args.pretrained_model_name_or_path, "chat_template.json")
+    # template_path = os.path.join(training_args.output_dir, "chat_template.json")
+    # shutil.copy2(source_path, template_path)
+    
+    try:
+        from huggingface_hub import hf_hub_download
+        # Try to download from HuggingFace if it's a HF model ID
+        source_path = hf_hub_download(
+            repo_id=model_args.pretrained_model_name_or_path,
+            filename="chat_template.json",
+            repo_type="model"
+        )
+    except Exception as e:
+        # Fallback to local path if not a HF model or file doesn't exist
+        source_path = os.path.join(model_args.pretrained_model_name_or_path, "chat_template.json")
+        if not os.path.exists(source_path):
+            logging.warning(f"chat_template.json not found at {source_path}, skipping copy. Error: {e}")
+            source_path = None
+    
+    if source_path and os.path.exists(source_path):
+        template_path = os.path.join(training_args.output_dir, "chat_template.json")
+        shutil.copy2(source_path, template_path)
+        logging.info(f"Copied chat_template.json from {source_path} to {template_path}")
+    else:
+        logging.warning("chat_template.json not found, skipping copy")
 
     model.config.use_cache = True
 

@@ -14,13 +14,13 @@ DATASET_ROOT="/mnt/nct-zfs/TCO-All/SharedDatasets/vsibench"  # Dataset root dire
 export DATASET_ROOT
 # JJ Freq Edit
 OUTPUT_ROOT="/mnt/nct-zfs/TCO-Test/jinjingxu/exps/train/spatialmllm"
-TRAIN_EPOCHS=1 # default 1 
-NUM_WORKERS=0 # default 8, set to 0 to avoid multiprocessing overhead
-NPROC_PER_NODE=1 # default 6 
-GRAD_ACCUM_STEPS=1 # default 8 
+TRAIN_EPOCHS=10 # default 1 
+NUM_WORKERS=2 # default 8, set to 0 to avoid multiprocessing overhead
+NPROC_PER_NODE=2 # default 6 
+GRAD_ACCUM_STEPS=8 # default 8 
 BATCH_SIZE=1 # default 1 
-VIDEO_MAX_FRAMES=1 # default 16
-VIDEO_MIN_FRAMES=1 # default 16
+VIDEO_MAX_FRAMES=16 # default 16
+VIDEO_MIN_FRAMES=16 # default 16
 VIDEO_FRAME_FPS=4 # default 4
 GRADIENT_CHECKPOINTING=True # default False
 MODEL_TYPE="spatial-mllm"
@@ -33,8 +33,9 @@ MASTER_ADDR=${MASTER_ADDR:-"127.0.0.1"}
 MASTER_PORT=${MASTER_PORT:-$(shuf -i 20001-29999 -n 1)}
 NNODES=${WORLD_SIZE:-1}
 
-# DeepSpeed configuration
-deepspeed=./scripts/training/zero3.json
+# DeepSpeed configuration (disabled for single GPU training)
+# deepspeed=./scripts/training/zero3.json
+USE_DEEPSPEED=False  # Set to True to enable DeepSpeed
 
 # Model configuration
 # model_type=spatial-mllm
@@ -75,8 +76,8 @@ mkdir -p ${output_dir}
 logfile="${output_dir}/$(date +'%Y%m%d_%H%M%S')_train.log"
 
 # Training arguments
+# JJ : Removed --deepspeed for native PyTorch single GPU training
 args="
-    --deepspeed ${deepspeed} \
     --model_type ${MODEL_TYPE} \
     --vggt_checkpoints_path ${vggt_checkpoints_path} \
     --spatial_embeds_layer_idx ${spatial_embeds_layer_idx} \
@@ -115,7 +116,8 @@ args="
     --run_name ${run_name} \
     --report_to wandb"
 
-# Launch training
+# Launch training (native PyTorch without DeepSpeed)
+# python ${entry_file} ${args} 2>&1 | tee -a "${logfile}"
 torchrun --nproc_per_node=${NPROC_PER_NODE} \
          --master_addr=${MASTER_ADDR} \
          --master_port=${MASTER_PORT} \

@@ -15,47 +15,65 @@ def find_repo_path():
     raise FileNotFoundError("No .git directory found in the path hierarchy.")
 
 
-REPO_PATH = find_repo_path()
+# REPO_PATH = find_repo_path()
+
+# JJ : Load DATASET_ROOT from environment variable
+if "DATASET_ROOT" not in os.environ:
+    raise ValueError(
+        "DATASET_ROOT environment variable is not set. "
+        "Please set it in your training script or shell environment."
+    )
+
+DATASET_ROOT = os.environ["DATASET_ROOT"]
+print(f"[INFO] DATASET_ROOT: {DATASET_ROOT}")
+
+if not os.path.exists(DATASET_ROOT):
+    raise FileNotFoundError(
+        f"DATASET_ROOT directory does not exist: {DATASET_ROOT}"
+    )
+
 
 ### Spatial-MLLM-Mix Data
+SPATIAL_MLLM_MIX_10_DBG = {
+    "annotation_path": os.path.join(DATASET_ROOT, "annotations/spatial-mllm-mix-10-dbg.jsonl"),
+    "data_path": DATASET_ROOT,
+}
+
 SPATIAL_MLLM_MIX_133K = {
-    "annotation_path": os.path.join(REPO_PATH, "datasets/annotations/spatial-mllm-mix-133k.jsonl"),
-    "data_path": os.path.join(REPO_PATH, "datasets/visuals"),
+    "annotation_path": os.path.join(DATASET_ROOT, "annotations/spatial-mllm-mix-133k.jsonl"),
+    "data_path": DATASET_ROOT,
 }
 
 SPATIAL_MLLM_MIX_203K = {
-    "annotation_path": os.path.join(REPO_PATH, "datasets/annotations/spatial-mllm-mix-203k.jsonl"),
-    "data_path": os.path.join(REPO_PATH, "datasets/visuals"),
+    "annotation_path": os.path.join(DATASET_ROOT, "annotations/spatial-mllm-mix-203k.jsonl"),
+    "data_path": DATASET_ROOT,
 }
 
 # Route Plan Data From VLM-3R
 ROUTE_PLAN_SCANNET_2K = {
-    "annotation_path": os.path.join(
-        REPO_PATH, "datasets/annotations/routeplan-2k.jsonl"
-    ),
-    "data_path": os.path.join(REPO_PATH, "datasets/visuals")
+    "annotation_path": os.path.join(DATASET_ROOT, "annotations/routeplan-2k.jsonl"),
+    "data_path": DATASET_ROOT,
 }
 
 ROUTE_PLAN_4K = {
-    "annotation_path": os.path.join(
-        REPO_PATH, "datasets/annotations/routeplan-4k.jsonl"
-    ),
-    "data_path": os.path.join(REPO_PATH, "datasets/visuals")
+    "annotation_path": os.path.join(DATASET_ROOT, "annotations/routeplan-4k.jsonl"),
+    "data_path": DATASET_ROOT,
 }
 
 ### VSI-590K Data From Cambrian-S
 VSI_590K = {
-    "annotation_path": os.path.join(REPO_PATH, "datasets/annotations/vsi-590k-processed.jsonl"),
-    "data_path": os.path.join(REPO_PATH, "datasets/visuals"),
+    "annotation_path": os.path.join(DATASET_ROOT, "annotations/vsi-590k-processed.jsonl"),
+    "data_path": DATASET_ROOT,
 }
 
 ### MindCube Data
 MINDCUBE_21K = {
-    "annotation_path": os.path.join(REPO_PATH, "datasets/annotations/mindcube-processed.jsonl"),
-    "data_path": os.path.join(REPO_PATH, "datasets/visuals"),
+    "annotation_path": os.path.join(DATASET_ROOT, "annotations/mindcube-processed.jsonl"),
+    "data_path": DATASET_ROOT,
 }
 
 data_dict = {
+    "spatial_mllm_mix_10_dbg": SPATIAL_MLLM_MIX_10_DBG,
     "spatial_mllm_mix_133k": SPATIAL_MLLM_MIX_133K,
     "spatial_mllm_mix_203k": SPATIAL_MLLM_MIX_203K,
     "route_plan_scannet_2k": ROUTE_PLAN_SCANNET_2K,
