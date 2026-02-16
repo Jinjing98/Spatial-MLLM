@@ -87,8 +87,13 @@ class CustomSpatialMLLMForConditionalGeneration(Qwen2_5_VLForConditionalGenerati
 
         self.offline_debug = False
         self.model.offline_debug = False
-        self.offline_debug = True
-        self.model.offline_debug = True
+        # JJ: Temporarily disabled for cleaner loss debugging
+        # self.offline_debug = True
+        # self.model.offline_debug = True
+        
+        # JJ: Track training step for NaN detection
+        self.global_step = 0
+        self.current_epoch = 0
     
     def forward(
         self,
@@ -303,9 +308,40 @@ class CustomSpatialMLLMForConditionalGeneration(Qwen2_5_VLForConditionalGenerati
                 self.visual_token_mask = torch.zeros_like(position_ids)[0]
                 print(f"Next Position_ids...") # 3, batch_size, 1
 
+        # JJ: Track training progress (only increment during training with labels)
+        if labels is not None:
+            self.global_step += 1
+            # Print progress every step (only during training)
+            if self.global_step % 1 == 0:  # Can change to % 10 for less verbose
+                print(f"[Step {self.global_step}] Forward pass...")
+        
+        # JJ: Debug - Check camera parameters and inputs_embeds BEFORE model forward
+        if inputs_embeds is not None and torch.isnan(inputs_embeds).any():
+            print(f"\n{'='*60}")
+            print(f"[JJ-CRITICAL-ERROR] *** NaN DETECTED at Step {self.global_step} ***")
+            print(f"[JJ-ERROR] inputs_embeds contains NaN BEFORE model forward!")
+            print(f"[JJ-ERROR] NaN count in inputs_embeds: {torch.isnan(inputs_embeds).sum()}")
+            if self.intrisics is not None:
+                print(f"[JJ-DEBUG-CAM] intrisics has NaN: {torch.isnan(self.intrisics).any().item()}")
+            if self.extrinsics_w2c is not None:
+                print(f"[JJ-DEBUG-CAM] extrinsics_w2c has NaN: {torch.isnan(self.extrinsics_w2c).any().item()}")
+            print(f"{'='*60}\n")
+            raise RuntimeError(
+                f"[NaN DETECTED] inputs_embeds contains NaN at global_step={self.global_step}. "
+                f"This indicates the problem occurred in video/spatial encoding or connector fusion. "
+                f"Check spatial_encoder or connector outputs."
+            )
+        
         intrisics_down, extrinsics_w2c_down = downsample_cams(self.intrisics, self.extrinsics_w2c, 
                                         temporal_patch_size=2, 
                                         extrinsics_sample_strategy="mean")
+        
+        # JJ: Debug - Check after downsampling
+        if intrisics_down is not None and torch.isnan(intrisics_down).any():
+            print(f"[JJ-ERROR] *** intrisics_down contains NaN AFTER downsampling! ***")
+        if extrinsics_w2c_down is not None and torch.isnan(extrinsics_w2c_down).any():
+            print(f"[JJ-ERROR] *** extrinsics_w2c_down contains NaN AFTER downsampling! ***")
+        
         self.intrisics_down = intrisics_down
         self.extrinsics_w2c_down = extrinsics_w2c_down
 
@@ -327,7 +363,35 @@ class CustomSpatialMLLMForConditionalGeneration(Qwen2_5_VLForConditionalGenerati
         )
 
         hidden_states = outputs[0]
+        
+        # JJ: Debug - Check hidden_states for NaN/Inf
+        if torch.isnan(hidden_states).any() or torch.isinf(hidden_states).any():
+            print(f"\n{'='*60}")
+            print(f"[JJ-CRITICAL-ERROR] NaN DETECTED at Step {self.global_step}")
+            print(f"[JJ-ERROR] hidden_states contains NaN or Inf AFTER model forward!")
+            print(f"NaN count: {torch.isnan(hidden_states).sum()}")
+            print(f"Inf count: {torch.isinf(hidden_states).sum()}")
+            print(f"{'='*60}\n")
+            raise RuntimeError(
+                f"[NaN DETECTED] hidden_states contains NaN at global_step={self.global_step}. "
+                f"This indicates the problem occurred INSIDE self.model() forward pass. "
+                f"Likely in PRoPE or custom decoder layers."
+            )
+        
         logits = self.lm_head(hidden_states)
+        
+        # JJ: Debug - Check logits for NaN/Inf
+        if torch.isnan(logits).any() or torch.isinf(logits).any():
+            print(f"\n{'='*60}")
+            print(f"[JJ-CRITICAL-ERROR] NaN DETECTED at Step {self.global_step}")
+            print(f"[JJ-ERROR] logits contains NaN or Inf!")
+            print(f"NaN count: {torch.isnan(logits).sum()}")
+            print(f"Inf count: {torch.isinf(logits).sum()}")
+            print(f"{'='*60}\n")
+            raise RuntimeError(
+                f"[NaN DETECTED] logits contains NaN at global_step={self.global_step}. "
+                f"This is propagated from hidden_states."
+            )
 
         loss = None
         if labels is not None:
@@ -343,6 +407,20 @@ class CustomSpatialMLLMForConditionalGeneration(Qwen2_5_VLForConditionalGenerati
             # Enable model parallelism
             shift_labels = shift_labels.to(shift_logits.device)
             loss = loss_fct(shift_logits, shift_labels)
+            
+            # JJ: Check loss value and raise error if NaN
+            if torch.isnan(loss) or torch.isinf(loss):
+                print(f"\n{'='*60}")
+                print(f"[JJ-CRITICAL-ERROR] NaN DETECTED at Step {self.global_step}")
+                print(f"[JJ-ERROR] Loss is NaN or Inf!")
+                print(f"[JJ-DEBUG-LOSS] labels != -100 count: {(labels != -100).sum().item()}")
+                print(f"shift_logits stats - min: {shift_logits.min()}, max: {shift_logits.max()}")
+                print(f"shift_logits NaN count: {torch.isnan(shift_logits).sum()}")
+                print(f"{'='*60}\n")
+                raise RuntimeError(
+                    f"[NaN DETECTED] Loss is NaN at global_step={self.global_step}. "
+                    f"This is the final manifestation of earlier NaN propagation."
+                )
 
         if not return_dict:
             output = (logits,) + outputs[1:]

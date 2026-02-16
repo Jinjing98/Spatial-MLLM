@@ -1,7 +1,38 @@
+story:
+sample frame mattters (3D q in general n actual spatil), while PE esepeically need to be take care.
+
+fot THW style, we extend with P.
+fot HW style, we extend with P.
+
+-pose from other nets. or even idealy online? or from slam?
+-samples from other sampling stategies
+-base PE format: THW and HW
+
+16.02:
+2867777: 4GPU prope-spatailmllm + sqa3d
+2867778: 4GPU spatailmllm + sqa3d
+
+2867904: 2GPU prope-spatailmllm + sqa3d
+x2867906: 2GPU spatailmllm + sqa3d
+
+prope-spatailmllm  + vsibench_test
+spatailmllm  + vsibench_test
+
 15.02:
-2844442 mergeaware_sa_f16
-tood:
-eval 
+2853405 tma_sa16_adapted_spbaseline
+ tma_sa16_prope_spbaseline
+
+
+2850844 eval sa16_prope_spbaseline
+2850847 eval sa32_prope_spbaseline
+2850856 eval tma_sa16_spbaseline
+2850857 eval tma_sa32_spbaseline
+2850901 eval tma_sa16_prope_spbaseline
+2850902 eval tma_sa32_prope_spbaseline
+
+
+2844454 mergeaware_sa_f16
+2849496 eval mergeaware_sa_f16
 
 14.02:
 
