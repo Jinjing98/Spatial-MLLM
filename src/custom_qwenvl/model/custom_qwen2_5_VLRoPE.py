@@ -411,7 +411,6 @@ def custom_get_rope_index(
 
                 time_tensor_long = time_tensor.long()
                 t_index = time_tensor_long.flatten()
-                print('time_tensor_long',  time_tensor_long, t_index)
 
                 h_index = torch.arange(llm_grid_h).view(1, -1, 1).expand(llm_grid_t, -1, llm_grid_w).flatten()
                 w_index = torch.arange(llm_grid_w).view(1, 1, -1).expand(llm_grid_t, llm_grid_h, -1).flatten()
@@ -420,10 +419,11 @@ def custom_get_rope_index(
                 # JJ
                 vision_len = llm_grid_t * llm_grid_h * llm_grid_w        
                 llm_visual_mask_list.append(torch.ones(vision_len, dtype=torch.long, device=input_ids.device))
-                print(f'*'*20)
-                print(f'Meta at rope position_ids_compute_mode: {position_ids_compute_mode}')
+                # JJ: Temporarily disabled for cleaner loss debugging
+                # print(f'*'*20)
+                # print(f'Meta at rope position_ids_compute_mode: {position_ids_compute_mode}')
                 st = ed + vision_len #llm_grid_t * llm_grid_h * llm_grid_w
-                print(f'ed, visual_len, text_len: {ed}, {vision_len}, {text_len}')
+                # print(f'ed, visual_len, text_len: {ed}, {vision_len}, {text_len}')
             
             # remaining trailing text
             if st < len(input_tokens):
@@ -441,10 +441,11 @@ def custom_get_rope_index(
 
             mrope_position_deltas.append(llm_positions.max() + 1 - len(total_input_ids[i]))
         
-        print(f'new_st, new_ed, trailing text len: {st}, {ed}, {text_len}')
-        print(f'llm_positions max value: {llm_positions.max()}')
-        print(f'total_input_ids shape: {total_input_ids[0].shape}')
-        print(f'mrope_position_deltas: {mrope_position_deltas}')
+        # JJ: Temporarily disabled for cleaner loss debugging
+        # print(f'new_st, new_ed, trailing text len: {st}, {ed}, {text_len}')
+        # print(f'llm_positions max value: {llm_positions.max()}')
+        # print(f'total_input_ids shape: {total_input_ids[0].shape}')
+        # print(f'mrope_position_deltas: {mrope_position_deltas}')
         
         mrope_position_deltas = torch.tensor(mrope_position_deltas, device=input_ids.device).unsqueeze(1)
         return position_ids, mrope_position_deltas, visual_token_mask

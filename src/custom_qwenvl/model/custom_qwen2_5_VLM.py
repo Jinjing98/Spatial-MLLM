@@ -158,7 +158,8 @@ class CustomQwen2_5_VLModel(Qwen2_5_VLModel):
             cache_position = torch.arange(
                 past_seen_tokens, past_seen_tokens + inputs_embeds.shape[1], device=inputs_embeds.device
             )
-        print(f"Cache position: {cache_position.shape} {cache_position[-1]}")
+        # JJ: Temporarily disabled for cleaner loss debugging
+        # print(f"Cache position: {cache_position.shape} {cache_position[-1]}")
 
         # ============================================================================
         # CUSTOMIZATION POINT 4: Custom Position IDs Processing
@@ -171,7 +172,8 @@ class CustomQwen2_5_VLModel(Qwen2_5_VLModel):
             assert 0, 'parsed externally n already have THW'
             position_ids = position_ids[None, ...].expand(3, position_ids.shape[0], -1)
         else:
-            print(f"Parsed Position ids: {position_ids.shape}")
+            pass  # JJ: Temporarily disabled for cleaner loss debugging
+            # print(f"Parsed Position ids: {position_ids.shape}")
         # YOUR CUSTOM CODE: Modify position_ids if needed
         # Example: Add spatial biases, modify based on camera parameters, etc.
 
@@ -189,29 +191,32 @@ class CustomQwen2_5_VLModel(Qwen2_5_VLModel):
         #JJ
         #optionally apply PRoPE for prefill vision tokens
         is_prefill = inputs_embeds.shape[1] > 1
-        print(f"Is prefill: {is_prefill} inputs_embeds.shape: {inputs_embeds.shape}")
+        # JJ: Temporarily disabled for cleaner loss debugging
+        # print(f"Is prefill: {is_prefill} inputs_embeds.shape: {inputs_embeds.shape}")
         
         if is_prefill and RoPE_attn_mode == 'PRoPE4VisionToken':
             assert intrisics is not None and extrinsics_w2c is not None, 'intrisics and extrinsics_w2c must be provided for prefill vision tokens'
             assert visual_token_mask.any(), 'visual_token_mask must be not all False for prefill vision tokens'
             assert visual_token_mask.shape == position_ids[0].shape, 'visual_token_mask must be the same shape as position_ids'
-            print('*'*20)
-            print(f'hidden states shape: {hidden_states.shape}')
-            print(f'position_ids shape: {position_ids.shape}')
-            print(f'cache_position shape: {cache_position.shape}')
-            print(f'visual_token_mask shape: {visual_token_mask.shape}')
-            print(f"kwargs['intrisics']: {intrisics.shape}")
-            print(f"kwargs['extrinsics_w2c']: {extrinsics_w2c.shape}")
-            # compute the num of visual tokens
-            num_visual_tokens = visual_token_mask.sum()
-            print(f'num_visual_tokens: {num_visual_tokens}')
-            num_temporal_merged_cams = intrisics.shape[1]
-            print(f'num_temporal_merged_cams: {num_temporal_merged_cams}')
-            print('*'*20)
+            # JJ: Temporarily disabled for cleaner loss debugging
+            # print('*'*20)
+            # print(f'hidden states shape: {hidden_states.shape}')
+            # print(f'position_ids shape: {position_ids.shape}')
+            # print(f'cache_position shape: {cache_position.shape}')
+            # print(f'visual_token_mask shape: {visual_token_mask.shape}')
+            # print(f"kwargs['intrisics']: {intrisics.shape}")
+            # print(f"kwargs['extrinsics_w2c']: {extrinsics_w2c.shape}")
+            # # compute the num of visual tokens
+            # num_visual_tokens = visual_token_mask.sum()
+            # print(f'num_visual_tokens: {num_visual_tokens}')
+            # num_temporal_merged_cams = intrisics.shape[1]
+            # print(f'num_temporal_merged_cams: {num_temporal_merged_cams}')
+            # print('*'*20)
 
             position_embeddings = self.rotary_emb(hidden_states, position_ids) #position_ids 3 B S
-            print('position_embeddings cos',position_embeddings[0].shape)
-            print('position_embeddings sin',position_embeddings[1].shape)
+            # JJ: Temporarily disabled for cleaner loss debugging
+            # print('position_embeddings cos',position_embeddings[0].shape)
+            # print('position_embeddings sin',position_embeddings[1].shape)
 
             # ============================================================================
             # POSE-AWARE ROTARY: Precompute pose transformation info for attention layers
@@ -229,8 +234,9 @@ class CustomQwen2_5_VLModel(Qwen2_5_VLModel):
                 # scope_range=kwargs.get('scope_range', (0.0, 1.0)),
                 scope_range=kwargs.get('scope_range', (0.0, 0.25)),
             )
-            print(f"[INFO] Pose-aware rotary precomputed: {pose_info['num_cams']} cameras, "
-                  f"head_dim={head_dim} ({pose_info['num_4d_groups']} groups of 4D)")
+            # JJ: Temporarily disabled for cleaner loss debugging
+            # print(f"[INFO] Pose-aware rotary precomputed: {pose_info['num_cams']} cameras, "
+            #       f"head_dim={head_dim} ({pose_info['num_4d_groups']} groups of 4D)")
             
             # Add pose_info to kwargs so it gets passed to decoder layers
             kwargs['pose_info'] = pose_info

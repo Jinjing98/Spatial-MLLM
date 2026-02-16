@@ -72,6 +72,17 @@ MINDCUBE_21K = {
     "data_path": DATASET_ROOT,
 }
 
+### JJ: SQA3D Data
+SQA3D_FILTERED_40K = {
+    "annotation_path": os.path.join(DATASET_ROOT, "annotations/sqa3d_filtered_40k.jsonl"),
+    "data_path": DATASET_ROOT,
+}
+
+SQA3D_FILTERED_40K_SMALL = {
+    "annotation_path": os.path.join(DATASET_ROOT, "annotations/sqa3d_filtered_40k_small.jsonl"),
+    "data_path": DATASET_ROOT,
+}
+
 data_dict = {
     "spatial_mllm_mix_10_dbg": SPATIAL_MLLM_MIX_10_DBG,
     "spatial_mllm_mix_133k": SPATIAL_MLLM_MIX_133K,
@@ -80,6 +91,8 @@ data_dict = {
     "route_plan_4k": ROUTE_PLAN_4K,
     "vsi_590k": VSI_590K,
     "mindcube_21k": MINDCUBE_21K,
+    "sqa3d_filtered_40k": SQA3D_FILTERED_40K,
+    "sqa3d_filtered_40k_small": SQA3D_FILTERED_40K_SMALL,
 }
 
 

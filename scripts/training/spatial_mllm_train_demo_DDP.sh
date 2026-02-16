@@ -8,24 +8,28 @@ export WANDB_PROJECT="Spatial-MLLM-SFT"
 export NCCL_P2P_DISABLE=1
 export NCCL_IB_DISABLE=1
 
-DATASET_ROOT="/mnt/nct-zfs/TCO-All/SharedDatasets/vsibench"  # Dataset root directory
+# DATASET_ROOT="/mnt/nct-zfs/TCO-All/SharedDatasets/vsibench"  # Dataset root directory
+# DATASETS="spatial_mllm_mix_10_dbg" # default "spatial_mllm_mix_133k,route_plan_scannet_2k"
+
+DATASET_ROOT="/mnt/nct-zfs/TCO-All/SharedDatasets/SQA3D"  # Dataset root directory
+DATASETS="sqa3d_filtered_40k_small" # default "sqa3d_filtered_40k,sqa3d_filtered_40k_small"
+
 # DATASET_ROOT="/data/horse/ws/jixu233b-metadata_ws/datasets/vsibench"  # Dataset root directory
 # Export DATASET_ROOT for Python scripts (__init__.py) to use for data loading
 export DATASET_ROOT
 # JJ Freq Edit
 OUTPUT_ROOT="/mnt/nct-zfs/TCO-Test/jinjingxu/exps/train/spatialmllm"
-TRAIN_EPOCHS=10 # default 1 
+TRAIN_EPOCHS=5 # default 1 
 NUM_WORKERS=2 # default 8, set to 0 to avoid multiprocessing overhead
 NPROC_PER_NODE=2 # default 6 
-GRAD_ACCUM_STEPS=8 # default 8 
+GRAD_ACCUM_STEPS=8 # JJ: reduced from 8 to match 4-sample debug dataset (4 samples / 2 GPUs = 2 per GPU)
 BATCH_SIZE=1 # default 1 
 VIDEO_MAX_FRAMES=16 # default 16
 VIDEO_MIN_FRAMES=16 # default 16
 VIDEO_FRAME_FPS=4 # default 4
 GRADIENT_CHECKPOINTING=True # default False
-MODEL_TYPE="spatial-mllm"
+MODEL_TYPE="custom-spatial-mllm" #"custom-spatial-mllm" # spatial-mllm
 PRETRAINED_MODEL_NAME_OR_PATH="Qwen/Qwen2.5-VL-3B-Instruct"
-DATASETS="spatial_mllm_mix_10_dbg" # default "spatial_mllm_mix_133k,route_plan_scannet_2k"
 RUN_NAME_APPENDIX=""
 
 # Distributed training configuration
@@ -113,8 +117,9 @@ args="
     --model_max_length 8192 \
     --gradient_checkpointing ${GRADIENT_CHECKPOINTING} \
     --dataloader_num_workers ${NUM_WORKERS} \
-    --run_name ${run_name} \
-    --report_to wandb"
+    --run_name ${run_name}"
+    #  \
+    # --report_to wandb"
 
 # Launch training (native PyTorch without DeepSpeed)
 # python ${entry_file} ${args} 2>&1 | tee -a "${logfile}"

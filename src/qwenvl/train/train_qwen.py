@@ -101,7 +101,42 @@ def set_model(model_args, model):
 
 
 def get_model(model_args, data_args, training_args, attn_implementation="flash_attention_2"):
-    if "spatial-mllm" in model_args.model_type.lower():
+    # JJ: Custom spatial MLLM with custom decoder
+    if model_args.model_type.lower() == "custom-spatial-mllm":
+        from src.custom_qwenvl.model.custom_spatial_mllm import (
+            CustomSpatialMLLMConfig,
+            CustomSpatialMLLMForConditionalGeneration,
+        )
+
+        spatial_mllm_config = CustomSpatialMLLMConfig.from_pretrained(
+            model_args.pretrained_model_name_or_path,
+            spatial_config={
+                "img_size": 518,
+                "patch_size": 14,
+                "embed_dim": 1024,
+            },
+            connector_config={
+                "connector_type": model_args.connector_type,
+                "spatial_embeds_layer_idx": model_args.spatial_embeds_layer_idx,
+            },
+        )
+        model = CustomSpatialMLLMForConditionalGeneration.from_pretrained(
+            model_args.pretrained_model_name_or_path,
+            config=spatial_mllm_config,
+            attn_implementation=attn_implementation,
+            torch_dtype=(torch.bfloat16 if training_args.bf16 else None),
+        )
+        # # load VGGT weights
+        if "ct" not in model_args.model_type.lower():
+            model.spatial_encoder.load_pretrained_weights(model_args.vggt_checkpoints_path)
+            device = next(model.parameters()).device
+            dtype = next(model.parameters()).dtype
+            model.spatial_encoder.to(device=device, dtype=dtype)
+
+        image_processor = Qwen2VLImageProcessorModified.from_pretrained(
+            model_args.pretrained_model_name_or_path,
+        )
+    elif "spatial-mllm" in model_args.model_type.lower():
         spatial_mllm_config = SpatialMLLMConfig.from_pretrained(
             model_args.pretrained_model_name_or_path,
             spatial_config={
@@ -202,6 +237,19 @@ def train(attn_implementation="flash_attention_2"):
         model.connector.print_trainable_parameters()
 
     data_module = make_supervised_data_module(tokenizer=tokenizer, data_args=data_args)
+    
+    # JJ: For custom-spatial-mllm, wrap collator to remove position_ids
+    # This forces the model to recompute position_ids with custom RoPE logic
+    if "custom-spatial-mllm" in model_args.model_type.lower():
+        original_collator = data_module['data_collator']
+        
+        def custom_spatial_mllm_collator_wrapper(instances):
+            batch = original_collator(instances)
+            batch.pop('position_ids', None)  # Remove if exists
+            return batch
+        
+        data_module['data_collator'] = custom_spatial_mllm_collator_wrapper
+    
     trainer = Trainer(
         model=model, processing_class=tokenizer, args=training_args, **data_module
     )
