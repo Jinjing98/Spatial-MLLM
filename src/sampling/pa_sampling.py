@@ -30,6 +30,234 @@ except ImportError:  # pragma: no cover - optional dependency fallback
 from src.qwenvl.external.vggt.models.vggt import VGGT  # type: ignore
 from src.qwenvl.external.vggt.utils.pose_enc import pose_encoding_to_extri_intri  # type: ignore
 
+# JJ: Import pose-aware sampling modules for Block 2
+sys.path.append(str(Path(__file__).resolve().parents[1] / 'utils'))
+try:
+    from src.utils import pose_fps_sampling
+    from src.utils import pose_efficient_sampling
+    from src.utils import flexiable_sa_sampling
+except ImportError:
+    import pose_fps_sampling
+    import pose_efficient_sampling
+    import flexiable_sa_sampling
+
+
+# ============================================================================
+# Block 2: Generic Pose-Aware Sampling Logic (Reusable)
+# ============================================================================
+
+def run_fps_sampling(poses, num_samples, distance_mode='max_norm', 
+                     starting_mode='medoid', reorth_rot=True, verbose=False):
+    """
+    Run Farthest Point Sampling (FPS) in SE(3) pose space.
+    
+    Args:
+        poses: numpy array of shape (N, 4, 4) - transformation matrices
+        num_samples: number of frames to sample
+        distance_mode: 'max_norm' or 'data_driven'
+        starting_mode: 'first', 'rand', or 'medoid'
+        reorth_rot: whether to re-orthogonalize rotation matrices
+        verbose: print progress
+    
+    Returns:
+        selected_indices: list of int - indices of selected frames in input poses
+    """
+    if verbose:
+        print(f"Running FPS sampling: {num_samples} samples from {len(poses)} poses")
+        print(f"  distance_mode={distance_mode}, starting_mode={starting_mode}")
+    
+    selected_indices = pose_fps_sampling.farthest_point_sampling(
+        poses=poses,
+        num_samples=num_samples,
+        distance_mode=distance_mode,
+        starting_mode=starting_mode,
+        reorth_rot=reorth_rot
+    )
+    
+    return selected_indices
+
+
+def run_efficient_sampling(poses, num_samples, sampling_mode='hybrid',
+                          normalization='std_norm', diagonal_priority=0.0,
+                          starting_mode='farthest', skip_first_frame=False,
+                          reorth_rot=True, grid_density=1.5, verbose=False):
+    """
+    Run Efficient Pose Sampling in 2D farness space.
+    
+    Args:
+        poses: numpy array of shape (N, 4, 4) - transformation matrices
+        num_samples: number of frames to sample
+        sampling_mode: 'grid', 'hybrid', or 'fps_2d'
+        normalization: 'std_norm' or 'max_norm'
+        diagonal_priority: weight [0.0-1.0] for diagonal priority
+        starting_mode: 'farthest', 'medoid', or 'first'
+        skip_first_frame: whether to skip first frame
+        reorth_rot: whether to re-orthogonalize rotation matrices
+        grid_density: grid density parameter
+        verbose: print progress
+    
+    Returns:
+        selected_indices: list of int - indices of selected frames in input poses
+    """
+    if verbose:
+        print(f"Running Efficient sampling: {num_samples} samples from {len(poses)} poses")
+        print(f"  sampling_mode={sampling_mode}, normalization={normalization}")
+    
+    selected_indices = pose_efficient_sampling.efficient_pose_sampling(
+        poses=poses,
+        num_samples=num_samples,
+        sampling_mode=sampling_mode,
+        normalization=normalization,
+        diagonal_priority=diagonal_priority,
+        starting_mode=starting_mode,
+        skip_first_frame=skip_first_frame,
+        reorth_rot=reorth_rot,
+        grid_density=grid_density,
+        verbose=verbose
+    )
+    
+    return selected_indices
+
+
+def run_uniform_sampling(num_total_frames, num_samples, verbose=False):
+    """
+    Run uniform sampling (linspace).
+    
+    Args:
+        num_total_frames: total number of frames available
+        num_samples: number of frames to sample
+        verbose: print progress
+    
+    Returns:
+        selected_indices: list of int - indices of selected frames
+    """
+    if verbose:
+        print(f"Running Uniform sampling: {num_samples} samples from {num_total_frames} frames")
+    
+    if num_samples >= num_total_frames:
+        selected_indices = list(range(num_total_frames))
+    else:
+        selected_indices = np.linspace(0, num_total_frames - 1, num_samples, dtype=int).tolist()
+    
+    return selected_indices
+
+
+def run_sa_sampling(predictions, num_samples, voxel_density=20.0,
+                   conf_percentile=50.0, conf_threshold=0.1, verbose=False):
+    """
+    Run Space-Aware (SA) sampling using voxel coverage.
+    
+    Note: For SA/Uniform sampling of videos, use sa_sampling.py instead.
+          This function is kept for API completeness but should not be used
+          in pa_sampling.py workflow.
+    
+    Args:
+        predictions: dict with 'world_points' and 'world_points_conf'
+        num_samples: number of frames to sample
+        voxel_density: voxels per scene dimension
+        conf_percentile: confidence threshold percentile
+        conf_threshold: minimum confidence value
+        verbose: print progress
+    
+    Returns:
+        selected_indices: list of int - indices of selected frames
+    
+    Raises:
+        NotImplementedError: SA sampling should use sa_sampling.py
+    """
+    raise NotImplementedError(
+        "SA sampling for videos should use sa_sampling.py, not pa_sampling.py.\n"
+        "pa_sampling.py is designed for FPS/Efficient sampling only."
+    )
+
+
+def extract_poses_from_predictions(predictions):
+    """
+    Extract pose matrices from VGGT predictions.
+    
+    Args:
+        predictions: dict with 'extrinsic' key of shape (1, T, 4, 4)
+    
+    Returns:
+        poses: numpy array of shape (T, 4, 4)
+    """
+    return flexiable_sa_sampling.extract_poses_from_predictions(predictions)
+
+
+def load_predictions_from_path(predictions_path, verbose=False):
+    """
+    Load VGGT predictions from .pt file.
+    
+    Args:
+        predictions_path: path to .pt file
+        verbose: print progress
+    
+    Returns:
+        predictions: dict with VGGT outputs
+    """
+    if verbose:
+        print(f"Loading VGGT predictions from: {predictions_path}")
+    
+    predictions = torch.load(predictions_path, weights_only=False)
+    
+    # Sanity check
+    if 'extrinsic' not in predictions:
+        raise ValueError(f"Predictions file missing 'extrinsic' key: {predictions_path}")
+    
+    T_pred = predictions['extrinsic'].shape[1]
+    if verbose:
+        print(f"  ✓ Loaded predictions with {T_pred} frames")
+    
+    if T_pred > 128:
+        warnings.warn(f"Predictions have {T_pred} frames (expected max 128)")
+    
+    return predictions
+
+
+def search_predictions_file(predictions_root, video_name, verbose=False):
+    """
+    Search for predictions .pt file in a directory tree.
+    
+    Args:
+        predictions_root: root directory to search (e.g., '.../sa_sampling_16f')
+        video_name: video name (e.g., '42446103')
+        verbose: print progress
+    
+    Returns:
+        predictions_path: path to found .pt file
+    
+    Raises:
+        FileNotFoundError: if no .pt file found
+    """
+    if verbose:
+        print(f"Searching for predictions in: {predictions_root}")
+        print(f"  Video name: {video_name}")
+    
+    # Search patterns: video_name/sa_predictions.pt or video_name/predictions.pt
+    search_patterns = [
+        os.path.join(predictions_root, '**', video_name, 'sa_predictions.pt'),
+        os.path.join(predictions_root, '**', video_name, 'predictions.pt'),
+        os.path.join(predictions_root, video_name, 'sa_predictions.pt'),
+        os.path.join(predictions_root, video_name, 'predictions.pt'),
+    ]
+    
+    for pattern in search_patterns:
+        matches = glob(pattern, recursive=True)
+        if matches:
+            predictions_path = matches[0]
+            if verbose:
+                print(f"  ✓ Found: {predictions_path}")
+            return predictions_path
+    
+    raise FileNotFoundError(
+        f"No predictions file found for video '{video_name}' in '{predictions_root}'.\n"
+        f"Searched patterns: {search_patterns}"
+    )
+
+
+# ============================================================================
+# Original SA Sampling Functions (from sa_sampling.py)
+# ============================================================================
 
 def compute_voxel_sets(world_points, world_points_conf_mask, x_min, y_min, z_min, voxel_size):
     """
@@ -594,43 +822,6 @@ def process_sa_sampling(device_id, video_name, tmp_dir, frame_indices, model, de
     if args.save_video:
         sa_video_path = os.path.join(sa_dir, f"{video_name}_sa_sampling.mp4")
         create_video_from_frames(sa_dir, sa_video_path, fps=1)
-    
-    # JJ : Visualization (optional)
-    if args.visualize_sampling or args.plot_pose_analysis:
-        try:
-            import sys
-            from pathlib import Path
-            sys.path.append(str(Path(__file__).resolve().parents[1] / 'utils'))
-            from src.utils.visualisation import visualize_pose_sampling_results
-            
-            # Extract poses from predictions (1, 128, 3, 4) -> (128, 4, 4)
-            extrinsic = predictions['extrinsic']  # (1, T, 3, 4)
-            if extrinsic.dim() == 4 and extrinsic.shape[0] == 1:
-                extrinsic = extrinsic[0]  # (T, 3, 4)
-            
-            # Convert to 4x4 by adding [0, 0, 0, 1] row
-            T = extrinsic.shape[0]
-            poses = np.zeros((T, 4, 4), dtype=np.float32)
-            poses[:, :3, :] = extrinsic.cpu().numpy()
-            poses[:, 3, 3] = 1.0
-            
-            if hasattr(args, 'visualize_sampling') and (args.visualize_sampling or args.plot_pose_analysis):
-                print(f"[GPU {device_id}] Generating visualization...")
-                visualize_pose_sampling_results(
-                    all_poses=poses,
-                    selected_indices=selected_frames,  # Indices in 128-frame pool
-                    output_dir=sa_dir,
-                    strategy_name='sa',
-                    method_name='Space-Aware',
-                    distance_mode='max_norm',
-                    plot_pose_analysis=args.plot_pose_analysis,
-                    pose_analysis_target='all',
-                    pose_source='VGGT Predicted',
-                    verbose=True
-                )
-                print(f"[GPU {device_id}] Visualization saved to {sa_dir}")
-        except Exception as e:
-            print(f"[GPU {device_id}] ⚠️  Visualization failed: {e}")
 
 
 def process_mergeaware_sa(device_id, video_name, tmp_dir, frame_indices, model, device, dtype, args):
@@ -721,43 +912,6 @@ def process_mergeaware_sa(device_id, video_name, tmp_dir, frame_indices, model, 
     if args.save_video:
         sa_video_path = os.path.join(sa_dir, f"{video_name}_mergeaware_sa_sampling.mp4")
         create_video_from_frames(sa_dir, sa_video_path, fps=1)
-    
-    # JJ : Visualization (optional)
-    if args.visualize_sampling or args.plot_pose_analysis:
-        try:
-            import sys
-            from pathlib import Path
-            sys.path.append(str(Path(__file__).resolve().parents[1] / 'utils'))
-            from src.utils.visualisation import visualize_pose_sampling_results
-            
-            # Extract poses from predictions (1, 128, 3, 4) -> (128, 4, 4)
-            extrinsic = predictions['extrinsic']  # (1, T, 3, 4)
-            if extrinsic.dim() == 4 and extrinsic.shape[0] == 1:
-                extrinsic = extrinsic[0]  # (T, 3, 4)
-            
-            # Convert to 4x4 by adding [0, 0, 0, 1] row
-            T = extrinsic.shape[0]
-            poses = np.zeros((T, 4, 4), dtype=np.float32)
-            poses[:, :3, :] = extrinsic.cpu().numpy()
-            poses[:, 3, 3] = 1.0
-            
-            if hasattr(args, 'visualize_sampling') and (args.visualize_sampling or args.plot_pose_analysis):
-                print(f"[GPU {device_id}] Generating visualization...")
-                visualize_pose_sampling_results(
-                    all_poses=poses,
-                    selected_indices=initial_selected_frames,  # Initial SA selected indices in 128-frame pool
-                    output_dir=sa_dir,
-                    strategy_name='mergeaware_sa',
-                    method_name='MergeAware-SA',
-                    distance_mode='max_norm',
-                    plot_pose_analysis=args.plot_pose_analysis,
-                    pose_analysis_target='all',
-                    pose_source='VGGT Predicted',
-                    verbose=True
-                )
-                print(f"[GPU {device_id}] Visualization saved to {sa_dir}")
-        except Exception as e:
-            print(f"[GPU {device_id}] ⚠️  Visualization failed: {e}")
 
 
 def process_uniform_sampling(device_id, video_name, tmp_dir, frame_indices, args):
@@ -784,32 +938,6 @@ def process_uniform_sampling(device_id, video_name, tmp_dir, frame_indices, args
         saved_count += 1
 
     print(f"[GPU {device_id}] Saved {saved_count} uniform sampled frames to {uniform_dir}")
-    
-    # JJ : Save metadata
-    # Compute indices in 128-frame pool (0-127)
-    sampled_pool_indices = []
-    for orig_idx in sampled_indices:
-        # Find position of orig_idx in frame_indices
-        try:
-            pool_idx = list(frame_indices).index(orig_idx)
-            sampled_pool_indices.append(int(pool_idx))
-        except ValueError:
-            print(f"[GPU {device_id}] Warning: Frame {orig_idx} not in frame_indices")
-    
-    metadata = {
-        "scene_name": video_name,
-        "selected_frames": [int(x) for x in sampled_indices],
-        "selected_pool_indices": sampled_pool_indices,
-        "num_frames": len(sampled_indices),
-        "sampling_type": "uniform"
-    }
-    metadata_path = os.path.join(uniform_dir, f"selected_frames.json")
-    with open(metadata_path, 'w') as f:
-        json.dump(metadata, f, indent=2)
-    
-    # JJ : Visualization (optional) - Note: Uniform has no VGGT predictions by default
-    # Visualization is skipped unless user wants pose-free visualization
-    print(f"[GPU {device_id}] Note: Visualization skipped for uniform sampling (no pose information by default)")
 
 
 def process_mergeaware_uniform(device_id, video_name, tmp_dir, frame_indices, vr, num_frames, model, device, dtype, args):
@@ -894,55 +1022,6 @@ def process_mergeaware_uniform(device_id, video_name, tmp_dir, frame_indices, vr
         uniform_predictions_path = os.path.join(uniform_dir, f"uniform_predictions.pt")
         torch.save(uniform_predictions_filtered, uniform_predictions_path)
         print(f"[GPU {device_id}] Saved uniform predictions ({list(uniform_predictions_filtered.keys())}) to {uniform_predictions_path}")
-        
-        # JJ : Visualization (optional) - only if predictions available
-        if args.visualize_sampling or args.plot_pose_analysis:
-            try:
-                import sys
-                from pathlib import Path
-                sys.path.append(str(Path(__file__).resolve().parents[1] / 'utils'))
-                from src.utils.visualisation import visualize_pose_sampling_results
-                
-                # Extract poses from predictions (1, N, 3, 4) -> (N, 4, 4)
-                extrinsic = uniform_predictions['extrinsic']  # (1, N, 3, 4)
-                if extrinsic.dim() == 4 and extrinsic.shape[0] == 1:
-                    extrinsic = extrinsic[0]  # (N, 3, 4)
-                
-                # Convert to 4x4 by adding [0, 0, 0, 1] row
-                N = extrinsic.shape[0]
-                poses = np.zeros((N, 4, 4), dtype=np.float32)
-                poses[:, :3, :] = extrinsic.cpu().numpy()
-                poses[:, 3, 3] = 1.0
-                
-                # For mergeaware_uniform, we visualize the initial uniform samples
-                # Find indices of initial_sampled in the final sampled_indices
-                initial_indices = []
-                for init_frame in initial_sampled:
-                    try:
-                        idx = list(sampled_indices).index(init_frame)
-                        initial_indices.append(idx)
-                    except ValueError:
-                        pass
-                
-                if hasattr(args, 'visualize_sampling') and (args.visualize_sampling or args.plot_pose_analysis):
-                    print(f"[GPU {device_id}] Generating visualization...")
-                    visualize_pose_sampling_results(
-                        all_poses=poses,
-                        selected_indices=initial_indices,  # Initial uniform selected indices
-                        output_dir=uniform_dir,
-                        strategy_name='mergeaware_uniform',
-                        method_name='MergeAware-Uniform',
-                        distance_mode='max_norm',
-                        plot_pose_analysis=args.plot_pose_analysis,
-                        pose_analysis_target='all',
-                        pose_source='VGGT Predicted',
-                        verbose=True
-                    )
-                    print(f"[GPU {device_id}] Visualization saved to {uniform_dir}")
-            except Exception as e:
-                print(f"[GPU {device_id}] ⚠️  Visualization failed: {e}")
-    else:
-        print(f"[GPU {device_id}] Note: Visualization skipped (requires --save_extra to run VGGT)")
 
     # Create video if requested
     if args.save_video:
@@ -1053,6 +1132,328 @@ def process_videos_on_device(device_id, video_paths, args):
 
 
 if __name__ == "__main__":
+    # JJ: Updated argument parser for FPS/Efficient pose-aware sampling
+    parser = argparse.ArgumentParser(description="Pose-Aware Frame Sampling (FPS/Efficient)")
+    
+    # Input/Output
+    parser.add_argument("--video_folder", type=str, default=None, help="Path to the input video folder.")
+    parser.add_argument("--video_path", type=str, default=None, help="Path to the input video file.")
+    parser.add_argument("--model_path", type=str, required=True, help="Path to the pretrained VGGT model.")
+    parser.add_argument("--output_folder", type=str, required=True, help="Path to the output folder for selected frames.")
+    parser.add_argument("--num_frames", type=int, default=16, help="Number of frames to sample.")
+    
+    # Sampling strategy
+    parser.add_argument("--sampling_type", type=str, default="fps", 
+                        choices=["fps", "efficient", "sa", "uniform", "mergeaware_uniform", "mergeaware_sa"], 
+                        help="Type of sampling: 'fps' (FPS in SE(3)), 'efficient' (2D farness), 'sa'/'uniform'/merge* (use sa_sampling.py)")
+    
+    # Pose source (TODO: extend to support different sample_pose_source and vis_pose_source)
+    # Currently: sample_pose_source == vis_pose_source for simplicity
+    # See process_and_sample_scannetpp.py for reference implementation
+    parser.add_argument("--pose_source", type=str, default="vggt", 
+                        choices=["vggt", "gt"],
+                        help="Pose source: 'vggt'=from VGGT predictions, 'gt'=from GT poses JSON")
+    parser.add_argument("--predictions_root", type=str, default=None,
+                        help="Root directory to search for predictions.pt (e.g., '.../sa_sampling_16f'). Mutually exclusive with --gt_poses_json.")
+    parser.add_argument("--gt_poses_json", type=str, default=None,
+                        help="Path to GT poses JSON file. Mutually exclusive with --predictions_root.")
+    
+    # FPS specific parameters
+    parser.add_argument("--fps_distance_mode", type=str, default="max_norm", 
+                        choices=["max_norm", "data_driven"],
+                        help="Distance mode for FPS sampling")
+    parser.add_argument("--fps_starting_mode", type=str, default="medoid", 
+                        choices=["first", "rand", "medoid"],
+                        help="Starting point selection mode for FPS")
+    
+    # Efficient sampling specific parameters
+    parser.add_argument("--efficient_sampling_mode", type=str, default="hybrid", 
+                        choices=["grid", "hybrid", "fps_2d"],
+                        help="Efficient sampling mode")
+    parser.add_argument("--efficient_normalization", type=str, default="std_norm", 
+                        choices=["std_norm", "max_norm"],
+                        help="Normalization mode for efficient sampling")
+    parser.add_argument("--efficient_diagonal_priority", type=float, default=0.0,
+                        help="Diagonal priority weight [0.0-1.0] (Recommended: 0.0)")
+    parser.add_argument("--efficient_starting_mode", type=str, default="farthest", 
+                        choices=["farthest", "medoid", "first"],
+                        help="Starting point selection mode for efficient sampling")
+    
+    # Visualization
+    parser.add_argument("--visualize_sampling", action="store_true", default=False,
+                        help="Generate sampling_quality.html visualization (disabled by default)")
+    parser.add_argument("--plot_pose_analysis", action="store_true", default=False,
+                        help="Generate pose_analysis.html with farness analysis (disabled by default)")
+    
+    # Legacy parameters (for SA/Uniform, redirect to sa_sampling.py)
+    parser.add_argument("--save_video", action="store_true", help="[SA/Uniform only] Save a video with fps=1")
+    parser.add_argument("--save_extra", action="store_true", help="[SA/Uniform only] Save VGGT predictions dict as .pt")
+    parser.add_argument("--extra_list", type=str, nargs="+",
+                        default=["depth", "depth_conf", "world_points", "world_points_conf", "extrinsic", "intrinsic"],
+                        help="[SA/Uniform only] List of prediction keys to save")
+    parser.add_argument("--dry_run", action="store_true", help="[SA/Uniform only] Dry run mode")
+    parser.add_argument("--neighbor_mode", type=str, default="after", choices=["before", "after", "random"],
+                        help="[Merge-aware only] How to add neighbor frames")
+    parser.add_argument("--fid_step_size", type=int, default=30,
+                        help="[Merge-aware uniform only] Frame ID step size")
+    parser.add_argument("--index_step_size", type=int, default=1,
+                        help="[Merge-aware SA only] Index step size")
+    
+    args = parser.parse_args()
+    
+    # ========================================================================
+    # Redirect SA/Uniform/Merge-aware to sa_sampling.py
+    # ========================================================================
+    if args.sampling_type in ["sa", "uniform", "mergeaware_uniform", "mergeaware_sa"]:
+        print("\n" + "="*80)
+        print(f"❌ ERROR: sampling_type='{args.sampling_type}' should use sa_sampling.py")
+        print("="*80)
+        print(f"\npa_sampling.py is designed for FPS/Efficient sampling only.")
+        print(f"For SA/Uniform/Merge-aware sampling, please use:")
+        print(f"\n  python src/sampling/sa_sampling.py \\")
+        print(f"    --sampling_type {args.sampling_type} \\")
+        print(f"    --num_frames {args.num_frames} \\")
+        print(f"    ...")
+        print("\n" + "="*80)
+        sys.exit(1)
+    
+    # ========================================================================
+    # Validate arguments for FPS/Efficient
+    # ========================================================================
+    if args.pose_source == "vggt" and args.predictions_root is None and args.gt_poses_json is None:
+        print("\n" + "="*80)
+        print("❌ ERROR: When pose_source='vggt', must provide --predictions_root OR run VGGT inference")
+        print("="*80)
+        print("\nOptions:")
+        print("  1. Provide --predictions_root to search for existing predictions.pt")
+        print("  2. TODO: Run VGGT inference (not yet implemented)")
+        print("  3. Use --pose_source=gt --gt_poses_json=/path/to/poses.json")
+        print("="*80)
+        sys.exit(1)
+    
+    if args.predictions_root is not None and args.gt_poses_json is not None:
+        print("\n" + "="*80)
+        print("❌ ERROR: Cannot specify both --predictions_root and --gt_poses_json")
+        print("="*80)
+        sys.exit(1)
+    
+    print("\n" + "="*80)
+    print(f"🚀 Pose-Aware Sampling: {args.sampling_type.upper()}")
+    print("="*80)
+    print(f"Strategy:      {args.sampling_type}")
+    print(f"Pose source:   {args.pose_source}")
+    print(f"Num frames:    {args.num_frames}")
+    print(f"Visualization: {'Enabled' if args.visualize_sampling else 'Disabled'}")
+    print("="*80 + "\n")
+    
+    # ========================================================================
+    # Main processing loop
+    # ========================================================================
+    
+    # Validate input arguments
+    if args.video_path is None and args.video_folder is None:
+        print("❌ Error: Must provide either --video_path or --video_folder")
+        sys.exit(1)
+    
+    # Get video list
+    if args.video_path is not None:
+        assert os.path.exists(args.video_path), f"Video path {args.video_path} does not exist."
+        all_videos = [args.video_path]
+    else:
+        all_videos = sorted(glob(os.path.join(args.video_folder, "*.mp4")))
+    
+    if not all_videos:
+        print("❌ No videos found to process.")
+        sys.exit(1)
+    
+    print(f"📹 Found {len(all_videos)} video(s) to process\n")
+    
+    # Process each video
+    for video_idx, video_path in enumerate(all_videos):
+        video_name = Path(video_path).stem
+        print(f"\n{'='*80}")
+        print(f"Processing video {video_idx+1}/{len(all_videos)}: {video_name}")
+        print(f"{'='*80}")
+        
+        # Create output directory
+        output_dir = Path(args.output_folder) / video_name
+        output_dir.mkdir(parents=True, exist_ok=True)
+        
+        # ====================================================================
+        # Step 1: Load or search for predictions
+        # ====================================================================
+        if args.predictions_root is not None:
+            # Search for existing predictions.pt
+            predictions_path = search_predictions_file(
+                args.predictions_root, 
+                video_name, 
+                verbose=True
+            )
+            predictions = load_predictions_from_path(predictions_path, verbose=True)
+        else:
+            # TODO: Run VGGT inference
+            print("⚠️  TODO: VGGT inference not yet implemented")
+            print("   For now, must provide --predictions_root")
+            continue
+        
+        # ====================================================================
+        # Step 2: Extract poses from predictions
+        # ====================================================================
+        print("\n📊 Extracting poses from predictions...")
+        poses = extract_poses_from_predictions(predictions)
+        print(f"  ✓ Extracted {poses.shape[0]} poses")
+        
+        # Sanity check
+        if poses.shape[0] > 128:
+            warnings.warn(f"Predictions have {poses.shape[0]} frames (expected max 128)")
+        
+        # ====================================================================
+        # Step 3: Run sampling
+        # ====================================================================
+        print(f"\n🎯 Running {args.sampling_type.upper()} sampling...")
+        
+        if args.sampling_type == 'fps':
+            selected_indices = run_fps_sampling(
+                poses=poses,
+                num_samples=args.num_frames,
+                distance_mode=args.fps_distance_mode,
+                starting_mode=args.fps_starting_mode,
+                reorth_rot=True,
+                verbose=True
+            )
+            method_name = f"FPS ({args.fps_distance_mode})"
+            
+        elif args.sampling_type == 'efficient':
+            selected_indices = run_efficient_sampling(
+                poses=poses,
+                num_samples=args.num_frames,
+                sampling_mode=args.efficient_sampling_mode,
+                normalization=args.efficient_normalization,
+                diagonal_priority=args.efficient_diagonal_priority,
+                starting_mode=args.efficient_starting_mode,
+                reorth_rot=True,
+                grid_density=1.5,
+                verbose=True
+            )
+            method_name = f"Efficient ({args.efficient_sampling_mode})"
+        
+        print(f"  ✓ Selected {len(selected_indices)} frames: {selected_indices}")
+        
+        # ====================================================================
+        # Step 4: Load video and extract selected frames
+        # ====================================================================
+        print(f"\n📦 Extracting selected frames from video...")
+        
+        # Initialize default values
+        num_frames_total = None
+        original_frame_ids = None
+        
+        # Load video
+        if VideoReader is None:
+            print("❌ Error: decord not installed. Cannot load video.")
+            print("   Install with: pip install decord")
+            print(f"   ⚠️  Sampling completed, but frames were not extracted.")
+            print(f"   ✓ Selected frame indices saved in metadata.json")
+            # Continue to save metadata even if video extraction fails
+        else:
+            vr = VideoReader(video_path, ctx=cpu(0))
+            num_frames_total = len(vr)
+            print(f"  Video has {num_frames_total} total frames")
+            
+            # Compute frame indices for VGGT input (128 frames max)
+            # Reuses sa_sampling.py:extract_initial_frames_from_video logic (line 537)
+            num_frames_vggt = min(128, num_frames_total)
+            frame_indices_vggt = np.linspace(0, num_frames_total - 1, num=num_frames_vggt, dtype=int)
+            print(f"  VGGT used {len(frame_indices_vggt)} frames (uniformly sampled)")
+            
+            # Map selected_indices back to original video frame IDs
+            original_frame_ids = [int(frame_indices_vggt[i]) for i in selected_indices]
+            print(f"  Mapped to original frame IDs: {original_frame_ids}")
+            
+            # Extract and save frames
+            saved_count = 0
+            for orig_idx in original_frame_ids:
+                frame = vr[orig_idx].asnumpy()
+                image = Image.fromarray(frame)
+                frame_filename = f"{video_name}_frame_{orig_idx:06d}.png"
+                frame_path = output_dir / frame_filename
+                image.save(frame_path)
+                saved_count += 1
+            
+            print(f"  ✓ Saved {saved_count} frames to {output_dir}")
+        
+        # ====================================================================
+        # Step 5: Save metadata
+        # ====================================================================
+        metadata = {
+            "scene_name": video_name,
+            "sampling_type": args.sampling_type,
+            "num_frames": len(selected_indices),
+            "total_frames_in_video": num_frames_total if num_frames_total is not None else "unknown (decord not available)",
+            "selected_frames": [int(x) for x in original_frame_ids] if original_frame_ids is not None else "unknown (decord not available)",
+            "selected_prediction_indices": [int(x) for x in selected_indices],
+            "pose_source": args.pose_source,
+            "predictions_path": predictions_path if args.predictions_root else None,
+        }
+        
+        if args.sampling_type == 'fps':
+            metadata["fps_settings"] = {
+                "distance_mode": args.fps_distance_mode,
+                "starting_mode": args.fps_starting_mode,
+            }
+        elif args.sampling_type == 'efficient':
+            metadata["efficient_settings"] = {
+                "sampling_mode": args.efficient_sampling_mode,
+                "normalization": args.efficient_normalization,
+                "diagonal_priority": args.efficient_diagonal_priority,
+                "starting_mode": args.efficient_starting_mode,
+            }
+        
+        metadata_path = output_dir / "selected_frames.json"
+        with open(metadata_path, 'w') as f:
+            json.dump(metadata, f, indent=2)
+        print(f"  ✓ Saved metadata to {metadata_path}")
+        
+        # ====================================================================
+        # Step 6: Visualization (optional)
+        # ====================================================================
+        if args.visualize_sampling:
+            print(f"\n📊 Generating visualization...")
+            try:
+                # Import visualization module
+                sys.path.append(str(Path(__file__).resolve().parents[1] / 'utils'))
+                from src.utils.visualisation import visualize_pose_sampling_results
+                
+                result = visualize_pose_sampling_results(
+                    all_poses=poses,
+                    selected_indices=selected_indices,
+                    output_dir=str(output_dir),
+                    strategy_name=args.sampling_type,
+                    method_name=method_name,
+                    distance_mode='max_norm',
+                    plot_pose_analysis=args.plot_pose_analysis,
+                    pose_analysis_target='all',
+                    pose_source='VGGT Predicted',
+                    verbose=True
+                )
+                
+                if result:
+                    print(f"  ✓ Visualization saved")
+                
+            except Exception as e:
+                print(f"  ⚠️  Visualization failed: {e}")
+        
+        print(f"\n✅ Completed: {video_name}")
+    
+    print("\n" + "="*80)
+    print(f"✅ All {len(all_videos)} video(s) processed successfully!")
+    print("="*80)
+
+
+# ========================================================================
+# Legacy main function for SA/Uniform sampling (kept for reference)
+# ========================================================================
+if False and __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Space-Aware Frame Sampling")
     parser.add_argument("--video_folder", type=str, required=True, help="Path to the input video folder.")
     parser.add_argument("--video_path", type=str, default=None, help="Path to the input video file.")
@@ -1077,11 +1478,6 @@ if __name__ == "__main__":
                         help="Frame ID step size for mergeaware_uniform (operates on original video frame IDs).")
     parser.add_argument("--index_step_size", type=int, default=1,
                         help="Index step size for mergeaware_sa (operates on 128-frame pool indices).")
-    # JJ : Visualization options
-    parser.add_argument("--visualize_sampling", action="store_true", default=False,
-                        help="Generate sampling_quality.html visualization (disabled by default)")
-    parser.add_argument("--plot_pose_analysis", action="store_true", default=False,
-                        help="Generate pose_analysis.html with farness analysis (disabled by default)")
     args = parser.parse_args()
 
     n_gpu = torch.cuda.device_count()

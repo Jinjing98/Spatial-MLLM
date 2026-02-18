@@ -1,0 +1,314 @@
+# JJ: Compute farness between camera poses
+import numpy as np
+import json
+from pathlib import Path
+from typing import List, Tuple, Union
+from scipy.spatial.transform import Rotation as R
+
+try:
+    import torch
+    TORCH_AVAILABLE = True
+except ImportError:
+    TORCH_AVAILABLE = False
+
+
+def compute_pose_farness(
+    poses_c2w: Union[List[np.ndarray], torch.Tensor],
+    trans_metric_mode: str = 'euclidean',
+    rot_metric_mode: str = 'angle_axis',
+    reorth_rot: bool = True,
+    translation_scale: Union[None, float] = 1.0
+) -> Tuple[List[float], List[float]]:
+    """
+    Compute farness (distance) between camera poses relative to the first pose.
+    Supports both NumPy arrays and PyTorch tensors.
+    
+    Args:
+        poses_c2w: Camera-to-world poses. List of 4x4 transformation matrices (NumPy) 
+                   or tensor of shape (N, 4, 4) (PyTorch)
+        trans_metric_mode: Translation distance metric, options:
+            - 'euclidean': Euclidean distance ||t1 - t2||
+        rot_metric_mode: Rotation distance metric, options:
+            - 'angle_axis': Angle from angle-axis representation of relative rotation
+        reorth_rot: Before computing rotation metric, re-orthogonalize rotations using SVD (default: True)
+        translation_scale: Scale factor for translation distances (default: 1.0)
+            - None: Raw distances (no scaling)
+            - 1.0: Normalize so max translation distance = 1.0
+    
+    Returns:
+        farness_trans: List of translation distances (same length as poses_c2w)
+        farness_rot: List of rotation distances in radians (same length as poses_c2w)
+    """
+    # Sanity check: poses should not be empty
+    if TORCH_AVAILABLE and isinstance(poses_c2w, torch.Tensor):
+        if poses_c2w.shape[0] == 0:
+            raise ValueError("Input poses_c2w is empty")
+        if poses_c2w.ndim != 3 or poses_c2w.shape[1] != 4 or poses_c2w.shape[2] != 4:
+            raise ValueError(f"Expected poses_c2w shape (N, 4, 4), got {poses_c2w.shape}")
+        return compute_pose_farness_torch(poses_c2w, trans_metric_mode, rot_metric_mode, reorth_rot, translation_scale)
+    else:
+        if not isinstance(poses_c2w, list) or len(poses_c2w) == 0:
+            raise ValueError("Input poses_c2w must be a non-empty list")
+        return compute_pose_farness_numpy(poses_c2w, trans_metric_mode, rot_metric_mode, reorth_rot, translation_scale)
+
+
+def compute_pose_farness_numpy(
+    poses_c2w: List[np.ndarray],
+    trans_metric_mode: str = 'euclidean',
+    rot_metric_mode: str = 'angle_axis',
+    reorth_rot: bool = True,
+    translation_scale: Union[None, float] = 1.0
+) -> Tuple[List[float], List[float]]:
+    """
+    NumPy implementation of pose farness computation.
+    
+    Args:
+        poses_c2w: List of 4x4 camera-to-world transformation matrices
+        trans_metric_mode: Translation distance metric
+        rot_metric_mode: Rotation distance metric
+        reorth_rot: Before computing rotation metric, re-orthogonalize rotations using SVD (default: True)
+        translation_scale: Scale factor for translation distances (default: 1.0)
+    
+    Returns:
+        farness_trans: List of translation distances
+        farness_rot: List of rotation distances in radians
+    """
+    if len(poses_c2w) == 0:
+        return [], []
+    
+    # Reference pose is the first one
+    ref_c2w = np.array(poses_c2w[0])
+    ref_t = ref_c2w[:3, 3]
+    ref_R = ref_c2w[:3, :3]
+    
+    # Re-orthogonalize reference rotation if requested
+    if reorth_rot:
+        ref_R = _reorthogonalize_rotation_numpy(ref_R)
+    
+    farness_trans = []
+    farness_rot = []
+    
+    for pose_c2w in poses_c2w:
+        pose_c2w = np.array(pose_c2w)
+        t = pose_c2w[:3, 3]
+        R = pose_c2w[:3, :3]
+        
+        # Re-orthogonalize current rotation if requested
+        if reorth_rot:
+            R = _reorthogonalize_rotation_numpy(R)
+        
+        # Compute translation distance
+        trans_dist = _compute_translation_distance_numpy(ref_t, t, trans_metric_mode)
+        farness_trans.append(trans_dist)
+        
+        # Compute rotation distance
+        rot_dist = _compute_rotation_distance_numpy(ref_R, R, rot_metric_mode)
+        farness_rot.append(rot_dist)
+    
+    # Apply translation scaling if requested
+    if translation_scale is not None:
+        max_trans = max(farness_trans) if farness_trans else 1.0
+        if max_trans > 0:
+            scale_factor = translation_scale / max_trans
+            farness_trans = [t * scale_factor for t in farness_trans]
+    
+    return farness_trans, farness_rot
+
+
+def compute_pose_farness_torch(
+    poses_c2w: torch.Tensor,
+    trans_metric_mode: str = 'euclidean',
+    rot_metric_mode: str = 'angle_axis',
+    reorth_rot: bool = True,
+    translation_scale: Union[None, float] = 1.0
+) -> Tuple[List[float], List[float]]:
+    """
+    PyTorch implementation of pose farness computation.
+    
+    Args:
+        poses_c2w: Tensor of shape (N, 4, 4) containing camera-to-world transformation matrices
+        trans_metric_mode: Translation distance metric
+        rot_metric_mode: Rotation distance metric
+        reorth_rot: Before computing rotation metric, re-orthogonalize rotations using SVD (default: True)
+        translation_scale: Scale factor for translation distances (default: 1.0)
+    
+    Returns:
+        farness_trans: List of translation distances
+        farness_rot: List of rotation distances in radians
+    """
+    if poses_c2w.shape[0] == 0:
+        return [], []
+    
+    # Reference pose is the first one
+    ref_c2w = poses_c2w[0]
+    ref_t = ref_c2w[:3, 3]
+    ref_R = ref_c2w[:3, :3]
+    
+    # Re-orthogonalize reference rotation if requested
+    if reorth_rot:
+        ref_R = _reorthogonalize_rotation_torch(ref_R)
+    
+    farness_trans = []
+    farness_rot = []
+    
+    for i in range(poses_c2w.shape[0]):
+        pose_c2w = poses_c2w[i]
+        t = pose_c2w[:3, 3]
+        R = pose_c2w[:3, :3]
+        
+        # Re-orthogonalize current rotation if requested
+        if reorth_rot:
+            R = _reorthogonalize_rotation_torch(R)
+        
+        # Compute translation distance
+        trans_dist = _compute_translation_distance_torch(ref_t, t, trans_metric_mode)
+        farness_trans.append(trans_dist)
+        
+        # Compute rotation distance
+        rot_dist = _compute_rotation_distance_torch(ref_R, R, rot_metric_mode)
+        farness_rot.append(rot_dist)
+    
+    # Apply translation scaling if requested
+    if translation_scale is not None:
+        max_trans = max(farness_trans) if farness_trans else 1.0
+        if max_trans > 0:
+            scale_factor = translation_scale / max_trans
+            farness_trans = [t * scale_factor for t in farness_trans]
+    
+    return farness_trans, farness_rot
+
+
+def _compute_translation_distance_numpy(t1: np.ndarray, t2: np.ndarray, mode: str) -> float:
+    """
+    Compute translation distance between two translation vectors (NumPy).
+    
+    Args:
+        t1: Translation vector 1 (3,)
+        t2: Translation vector 2 (3,)
+        mode: Distance metric mode
+    
+    Returns:
+        Translation distance
+    """
+    if mode == 'euclidean':
+        return float(np.linalg.norm(t2 - t1))
+    else:
+        raise NotImplementedError(f"Translation metric mode '{mode}' not implemented")
+
+
+def _reorthogonalize_rotation_numpy(R: np.ndarray) -> np.ndarray:
+    """
+    Re-orthogonalize a rotation matrix using SVD (NumPy).
+    
+    Args:
+        R: Rotation matrix (3x3) that may have numerical errors
+    
+    Returns:
+        Re-orthogonalized rotation matrix (3x3)
+    """
+    U, _, Vt = np.linalg.svd(R)
+    R_orth = U @ Vt
+    # Ensure proper rotation (det = 1, not reflection with det = -1)
+    if np.linalg.det(R_orth) < 0:
+        U[:, -1] *= -1
+        R_orth = U @ Vt
+    return R_orth
+
+
+def _compute_rotation_distance_numpy(R1: np.ndarray, R2: np.ndarray, mode: str) -> float:
+    """
+    Compute rotation distance between two rotation matrices (NumPy).
+    
+    Args:
+        R1: Rotation matrix 1 (3x3)
+        R2: Rotation matrix 2 (3x3)
+        mode: Distance metric mode
+    
+    Returns:
+        Rotation distance in radians
+    """
+    if mode == 'angle_axis':
+        # Convert relative rotation to angle-axis and extract angle
+        R_rel = R1.T @ R2
+        rot = R.from_matrix(R_rel)
+        rotvec = rot.as_rotvec()
+        angle = np.linalg.norm(rotvec)
+        return float(angle)
+    else:
+        raise NotImplementedError(f"Rotation metric mode '{mode}' not implemented")
+
+
+def _compute_translation_distance_torch(t1: torch.Tensor, t2: torch.Tensor, mode: str) -> float:
+    """
+    Compute translation distance between two translation vectors (PyTorch).
+    
+    Args:
+        t1: Translation vector 1 (3,)
+        t2: Translation vector 2 (3,)
+        mode: Distance metric mode
+    
+    Returns:
+        Translation distance
+    """
+    if mode == 'euclidean':
+        return float(torch.norm(t2 - t1).item())
+    else:
+        raise NotImplementedError(f"Translation metric mode '{mode}' not implemented")
+
+
+def _reorthogonalize_rotation_torch(R: torch.Tensor) -> torch.Tensor:
+    """
+    Re-orthogonalize a rotation matrix using SVD (PyTorch).
+    
+    Args:
+        R: Rotation matrix (3x3) that may have numerical errors
+    
+    Returns:
+        Re-orthogonalized rotation matrix (3x3)
+    """
+    U, _, Vt = torch.linalg.svd(R)
+    R_orth = U @ Vt
+    # Ensure proper rotation (det = 1, not reflection with det = -1)
+    if torch.det(R_orth) < 0:
+        U[:, -1] *= -1
+        R_orth = U @ Vt
+    return R_orth
+
+
+def _compute_rotation_distance_torch(R1: torch.Tensor, R2: torch.Tensor, mode: str) -> float:
+    """
+    Compute rotation distance between two rotation matrices (PyTorch).
+    
+    Args:
+        R1: Rotation matrix 1 (3x3)
+        R2: Rotation matrix 2 (3x3)
+        mode: Distance metric mode
+    
+    Returns:
+        Rotation distance in radians
+    """
+    if mode == 'angle_axis':
+        # Convert relative rotation to angle-axis and extract angle
+        R_rel = R1.T @ R2
+        # Use matrix_to_axis_angle implementation
+        angle = _rotation_matrix_to_angle_torch(R_rel)
+        return float(angle.item())
+    else:
+        raise NotImplementedError(f"Rotation metric mode '{mode}' not implemented")
+
+
+def _rotation_matrix_to_angle_torch(R: torch.Tensor) -> torch.Tensor:
+    """
+    Extract rotation angle from rotation matrix (PyTorch).
+    
+    Args:
+        R: Rotation matrix (3x3)
+    
+    Returns:
+        Rotation angle in radians
+    """
+    # Compute angle from rotation matrix using trace
+    trace = torch.trace(R)
+    cos_angle = torch.clamp((trace - 1) / 2, -1.0, 1.0)
+    angle = torch.acos(cos_angle)
+    return angle

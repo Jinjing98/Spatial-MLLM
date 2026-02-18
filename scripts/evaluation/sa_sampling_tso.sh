@@ -51,27 +51,39 @@ BASE_DIR="${RESULTS_SAVE_ROOT}/vsibench"
 # NUM_FRAMES="${NUM_FRAMES:-4}"
 # NUM_FRAMES="${NUM_FRAMES:-8}"
 NUM_FRAMES="${NUM_FRAMES:-16}"
+# NUM_FRAMES="${NUM_FRAMES:-50}"
 # NUM_FRAMES="${NUM_FRAMES:-32}"
 
 # Sampling type: "both" (default), "sa", "uniform", "mergeaware_uniform", "mergeaware_sa"
 # SAMPLING_TYPE="${SAMPLING_TYPE:-both}"
-# SAMPLING_TYPE="${SAMPLING_TYPE:-sa}"
+SAMPLING_TYPE="${SAMPLING_TYPE:-sa}"
 # SAMPLING_TYPE="${SAMPLING_TYPE:-mergeaware_uniform}"
 # SAMPLING_TYPE="${SAMPLING_TYPE:-uniform}"
-SAMPLING_TYPE="${SAMPLING_TYPE:-mergeaware_sa}"
+# SAMPLING_TYPE="${SAMPLING_TYPE:-mergeaware_sa}"
 # 
 # JJ : Temporal merge aware sampling parameters
 # neighbor_mode: "before", "after" (default), or "random"
-NEIGHBOR_MODE="${NEIGHBOR_MODE:-random}"
+NEIGHBOR_MODE="${NEIGHBOR_MODE:-after}"
 # fid_step_size: Frame ID step size for mergeaware_uniform (default: 30)
-FID_STEP_SIZE="${FID_STEP_SIZE:-30}"
+FID_STEP_SIZE="${FID_STEP_SIZE:-30}" # used for mergeaware_uniform
 # index_step_size: Index step size for mergeaware_sa (default: 1)
-INDEX_STEP_SIZE="${INDEX_STEP_SIZE:-1}"
+INDEX_STEP_SIZE="${INDEX_STEP_SIZE:-1}" # used for mergeaware_sa
 
 # Dry run mode: set DRY_RUN="--dry_run" to only check anomalies without processing
 # Usage: DRY_RUN="--dry_run" bash scripts/evaluation/sa_sampling.sh
 DRY_RUN="${DRY_RUN:-}"
+
+# JJ : Visualization options (disabled by default)
+# Set to "--visualize_sampling" to enable sampling_quality.html
+# VISUALIZE_SAMPLING="${VISUALIZE_SAMPLING:-}"
+VISUALIZE_SAMPLING="--visualize_sampling"
+# Set to "--plot_pose_analysis" to enable pose_analysis.html
+# PLOT_POSE_ANALYSIS="${PLOT_POSE_ANALYSIS:-}"
+PLOT_POSE_ANALYSIS="--plot_pose_analysis"
+
 VIDEO_PATH="/mnt/nct-zfs/TCO-All/SharedDatasets/vsibench/arkitscenes/42446103.mp4"
+# VIDEO_PATH="/mnt/cluster/workspaces/jinjingxu/proj/vlm/SpatialMllmHallucinate/third_party/Spatial-MLLM/datasets/scannetpp/video/00777c41d4.mp4"
+# VIDEO_PATH="/mnt/cluster/workspaces/jinjingxu/proj/vlm/SpatialMllmHallucinate/third_party/Spatial-MLLM/datasets/scannetpp/video/020312de8d.mp4"
 
 if [[ -n "$DRY_RUN" ]]; then
     echo "============================================"
@@ -109,6 +121,8 @@ run_sampling() {
             --output_folder "${BASE_DIR}/sa_sampling_${NUM_FRAMES}f/${dataset}" \
             --num_frames $NUM_FRAMES \
             --sampling_type "sa" \
+            $VISUALIZE_SAMPLING \
+            $PLOT_POSE_ANALYSIS \
             $DRY_RUN
         
         # Process uniform sampling
@@ -119,6 +133,8 @@ run_sampling() {
             --output_folder "${BASE_DIR}/uniform_sampling_${NUM_FRAMES}f/${dataset}" \
             --num_frames $NUM_FRAMES \
             --sampling_type "uniform" \
+            $VISUALIZE_SAMPLING \
+            $PLOT_POSE_ANALYSIS \
             $DRY_RUN
     else
         # Single sampling type
@@ -134,6 +150,8 @@ run_sampling() {
             --index_step_size $INDEX_STEP_SIZE \
             --video_path "$VIDEO_PATH" \
             --save_extra \
+            $VISUALIZE_SAMPLING \
+            $PLOT_POSE_ANALYSIS \
             $DRY_RUN
     fi
     
