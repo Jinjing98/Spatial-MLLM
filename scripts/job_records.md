@@ -1,3 +1,6 @@
+
+
+
 story:
 sample frame mattters (3D q in general n actual spatil), while PE esepeically need to be take care.
 
@@ -8,12 +11,21 @@ fot HW style, we extend with P.
 -samples from other sampling stategies
 -base PE format: THW and HW
 
+18.02
+//fps:
+f16:2909474
+f8:2909475
+//effecient:
+f16:2909488
+f8:2909489
+
+
 16.02:
-2867777: 4GPU prope-spatailmllm + sqa3d
-2867778: 4GPU spatailmllm + sqa3d
+4GPU prope-spatailmllm + sqa3d
+4GPU spatailmllm + sqa3d
 
 2867904: 2GPU prope-spatailmllm + sqa3d
-x2867906: 2GPU spatailmllm + sqa3d
+2892391: By chance successed (no idea why) 2868429 x2867906: 2GPU spatailmllm + sqa3d
 
 prope-spatailmllm  + vsibench_test
 spatailmllm  + vsibench_test
