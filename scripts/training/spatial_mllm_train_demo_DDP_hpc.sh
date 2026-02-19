@@ -1,9 +1,9 @@
 #!/bin/bash
 
 #SBATCH --nodes=1
-#SBATCH --ntasks=2  #2
+#SBATCH --ntasks=1  #JJ was 2 for init 2 sft models
 #SBATCH --gres=gpu:2           # use 1 GPU per node (i.e. use one GPU per task)
-#SBATCH --gpus-per-task=1
+#SBATCH --gpus-per-task=2 #JJ was 1 for init 2 sft models
 #SBATCH --cpus-per-task=8
 #SBATCH --time=40:00:00
 #SBATCH --mem=80G
@@ -13,13 +13,12 @@
 #SBATCH --error=/data/horse/ws/jixu233b-metadata_ws/hpc_out/%j.err
 #SBATCH --output=/data/horse/ws/jixu233b-metadata_ws/hpc_out/%j.out
 
-# source /software/rapids/r24.10/Anaconda3/2024.02-1/etc/profile.d/conda.sh
-# conda activate /data/horse/ws/jixu233b-3d_ws/envs/spatial-mllm
-# module load CUDA/12.4.0
-cd $SLURM_SUBMIT_DIR
-
-
 set -euo pipefail
+
+source /software/rapids/r24.10/Anaconda3/2024.02-1/etc/profile.d/conda.sh
+conda activate /data/horse/ws/jixu233b-3d_ws/envs/spatial-mllm
+module load CUDA/12.4.0
+cd $SLURM_SUBMIT_DIR
 
 # Set environment variables
 # export WANDB_BASE_URL="https://api.bandw.top"
@@ -50,7 +49,7 @@ VIDEO_MAX_FRAMES=16 # default 16
 VIDEO_MIN_FRAMES=16 # default 16
 VIDEO_FRAME_FPS=4 # default 4
 GRADIENT_CHECKPOINTING=True # default False
-MODEL_TYPE="custom-spatial-mllm" #"custom-spatial-mllm" # spatial-mllm
+MODEL_TYPE="spatial-mllm" #"custom-spatial-mllm" # spatial-mllm
 PRETRAINED_MODEL_NAME_OR_PATH="Qwen/Qwen2.5-VL-3B-Instruct"
 RUN_NAME_APPENDIX="_2x8_hpc"
 
