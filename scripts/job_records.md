@@ -11,13 +11,56 @@ fot HW style, we extend with P.
 -samples from other sampling stategies
 -base PE format: THW and HW
 
+19.02
+
 18.02
+EVAL:
+adapted on mllm
+effi: 8 16
+sa: 8 16
+wo T on mllm
+
+our trained on sqa40k:
+8/16/32
+custom mllm 2914804
+mllm 2914805
+
+effi: 
+qwen3 32
+mllm 32
+
+sp mllm 1.1 135:
+2912404 fps 16 
+2913112 fps 8
+2913111 eff 16
+2912414 eff 8
+2912408 sa 8
+
+qwen3vl-rp-routeplan-missing
+2912431 f8
+2912432 f16 
+2912436 f32
+
+qwen2.5: 
+2910786 fps 16
+2911430 ?2910813 fps 8
+2911432 ?2910838 effi 16 
+2910851 effi 8
+qwen3: 
+2911079 fps 16 41069025
+2911434 ?2911080 effi 16
+
+GEN:
+# eff16 :2912355
+# effi32:2912384
+# fps8:2912390
+# fps32:2912393
 //fps:
 f16:2909474
 f8:2909475
 //effecient:
-f16:2909488
-f8:2909489
+?f16:2909833
+f8:2909834
 
 
 16.02:

@@ -48,11 +48,12 @@ pwd
 BASE_DIR="${DATA_ROOT}/vsibench"
 
 # Number of frames to sample
+NUM_FRAMES="${NUM_FRAMES:-32}"
 # NUM_FRAMES="${NUM_FRAMES:-16}"
-NUM_FRAMES="${NUM_FRAMES:-8}"
+# NUM_FRAMES="${NUM_FRAMES:-8}"
 # Sampling type: "fps" or "efficient"
 # SAMPLING_TYPE="${SAMPLING_TYPE:-fps}"
-SAMPLING_TYPE="${SAMPLING_TYPE:-efficient}"
+SAMPLING_TYPE="${SAMPLING_TYPE:-fps}"
 
 # Predictions root (must exist, from sa_sampling.py output)
 # Example: sa_sampling_16f, sa_sampling_128f, etc.
@@ -69,7 +70,7 @@ FPS_STARTING_MODE="${FPS_STARTING_MODE:-first}"    # Options: medoid, random, fi
 # Efficient Sampling Parameters
 # ============================================================================
 EFFICIENT_SAMPLING_MODE="${EFFICIENT_SAMPLING_MODE:-hybrid}"     # Options: grid, hybrid, fps2d
-EFFICIENT_NORMALIZATION="${EFFICIENT_NORMALIZATION:-minmax}"    # Options: minmax, standard
+EFFICIENT_NORMALIZATION="${EFFICIENT_NORMALIZATION:-max_norm}"    # Options: max_norm, std_norm 
 EFFICIENT_DIAGONAL_PRIORITY="${EFFICIENT_DIAGONAL_PRIORITY:-0.0}"
 EFFICIENT_STARTING_MODE="${EFFICIENT_STARTING_MODE:-first}"    # Options: medoid, random, first
 

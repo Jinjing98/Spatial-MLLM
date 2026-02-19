@@ -43,7 +43,10 @@ def load_model_and_processor(model_type: str, model_path: str, use_visual=None, 
             device_map="cuda",
             attn_implementation="flash_attention_2",
         )
-        processor = Qwen2_5_VLProcessor.from_pretrained(model_path, use_fast=True)
+        # processor = Qwen2_5_VLProcessor.from_pretrained(model_path, use_fast=True)
+        hf_processor_path='Diankun/Spatial-MLLM-v1.1-Instruct-135K' # JJ: need when eval our sft model
+        processor = Qwen2_5_VLProcessor.from_pretrained(hf_processor_path, use_fast=True)
+
         return model, processor
     
     elif model_type == "spatial-mllm":
@@ -61,7 +64,9 @@ def load_model_and_processor(model_type: str, model_path: str, use_visual=None, 
             device_map="cuda",
             attn_implementation="flash_attention_2",
         )
-        processor = Qwen2_5_VLProcessor.from_pretrained(model_path, use_fast=True)
+        # processor = Qwen2_5_VLProcessor.from_pretrained(model_path, use_fast=True)
+        hf_processor_path='Diankun/Spatial-MLLM-v1.1-Instruct-135K' # JJ: need when eval our sft model
+        processor = Qwen2_5_VLProcessor.from_pretrained(hf_processor_path, use_fast=True)
         return model, processor
 
     elif model_type == "qwen2.5-vl":

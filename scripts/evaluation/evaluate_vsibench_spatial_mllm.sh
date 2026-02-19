@@ -25,8 +25,8 @@ RESULTS_SAVE_ROOT="/home/jixu233b/Projects/VLM_3D/SpatialMllmHallucinate/third_p
 
 # activate conda
 source /software/rapids/r24.10/Anaconda3/2024.02-1/etc/profile.d/conda.sh
-# conda activate /data/horse/ws/jixu233b-3d_ws/envs/spatial-mllm
-conda activate /data/horse/ws/jixu233b-3d_ws/envs/transformers_v5
+conda activate /data/horse/ws/jixu233b-3d_ws/envs/spatial-mllm
+# conda activate /data/horse/ws/jixu233b-3d_ws/envs/transformers_v5
 module load CUDA/12.4.0 # nvcc
 
 cd "$(dirname "$0")"
@@ -56,11 +56,14 @@ MODEL_TYPE="spatial-mllm"
 # JJ: Fixed default values (not overridable by env vars)
 # MODEL_TYPE="qwen2.5-vl"
 # MODEL_PATH="Qwen/Qwen2.5-VL-3B-Instruct"
-MODEL_TYPE="qwen3-vl"
-MODEL_PATH="Qwen/Qwen3-VL-2B-Instruct"
+
+# MODEL_TYPE="qwen3-vl"
+# MODEL_PATH="Qwen/Qwen3-VL-2B-Instruct"
+
 # MODEL_TYPE="spatial-mllm"
-# MODEL_TYPE="custom-spatial-mllm"
-# MODEL_PATH="Diankun/Spatial-MLLM-v1.1-Instruct-135K"
+
+MODEL_TYPE="custom-spatial-mllm"
+MODEL_PATH="Diankun/Spatial-MLLM-v1.1-Instruct-135K"
 MODEL_NAME=$(echo "$MODEL_PATH" | cut -d'/' -f2)
 
 
@@ -98,8 +101,8 @@ QUESTION_TYPES=("${QUESTION_TYPE_LIST[@]}") #all cases
 
 # nframes=(None)
 # nframes=(8)
-# nframes=(16)
-nframes=(32)
+nframes=(16)
+# nframes=(32)
 # sample_fps=(None)
 # sample_fps=(1)
 
