@@ -56,10 +56,10 @@ NUM_FRAMES="${NUM_FRAMES:-16}"
 
 # Sampling type: "both" (default), "sa", "uniform", "mergeaware_uniform", "mergeaware_sa"
 # SAMPLING_TYPE="${SAMPLING_TYPE:-both}"
-SAMPLING_TYPE="${SAMPLING_TYPE:-sa}"
+# SAMPLING_TYPE="${SAMPLING_TYPE:-sa}"
 # SAMPLING_TYPE="${SAMPLING_TYPE:-mergeaware_uniform}"
 # SAMPLING_TYPE="${SAMPLING_TYPE:-uniform}"
-# SAMPLING_TYPE="${SAMPLING_TYPE:-mergeaware_sa}"
+SAMPLING_TYPE="${SAMPLING_TYPE:-mergeaware_sa}"
 # 
 # JJ : Temporal merge aware sampling parameters
 # neighbor_mode: "before", "after" (default), or "random"
@@ -150,6 +150,7 @@ run_sampling() {
             --index_step_size $INDEX_STEP_SIZE \
             --video_path "$VIDEO_PATH" \
             --save_extra \
+            --enforce_duplicate \
             $VISUALIZE_SAMPLING \
             $PLOT_POSE_ANALYSIS \
             $DRY_RUN

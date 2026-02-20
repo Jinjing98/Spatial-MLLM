@@ -644,13 +644,21 @@ def process_mergeaware_sa(device_id, video_name, tmp_dir, frame_indices, model, 
     initial_selected_frames, predictions = space_aware_frame_sampling(model, images, K, dtype)
     print(f"[GPU {device_id}] Initial SA selected frame indices in 128-pool: {initial_selected_frames}")
     
-    # Add neighbor frames in index space (0-127)
-    selected_pool_indices = add_neighbor_frames(
-        initial_selected_frames,
-        args.neighbor_mode,
-        args.index_step_size,
-        len(frame_indices)
-    )
+    # JJ: Add neighbor frames or simply duplicate each frame
+    if args.enforce_duplicate:
+        # Simple duplication: [f1, f1, f2, f2, ...]
+        selected_pool_indices = []
+        for idx in initial_selected_frames:
+            selected_pool_indices.extend([idx, idx])
+        print(f"[GPU {device_id}] Enforce duplicate mode: each frame duplicated")
+    else:
+        # Add neighbor frames in index space (0-127)
+        selected_pool_indices = add_neighbor_frames(
+            initial_selected_frames,
+            args.neighbor_mode,
+            args.index_step_size,
+            len(frame_indices)
+        )
     
     print(f"[GPU {device_id}] Temporal merge aware SA: {len(initial_selected_frames)} initial pool indices -> {len(selected_pool_indices)} final pool indices")
     print(f"[GPU {device_id}] Final pool indices: {selected_pool_indices}")
@@ -825,13 +833,21 @@ def process_mergeaware_uniform(device_id, video_name, tmp_dir, frame_indices, vr
         initial_sampled_local = np.linspace(0, len(frame_indices) - 1, num=n_prime, dtype=int)
         initial_sampled = frame_indices[initial_sampled_local]
     
-    # Add neighbor frames in frame ID space
-    sampled_indices = add_neighbor_frames(
-        initial_sampled, 
-        args.neighbor_mode, 
-        args.fid_step_size, 
-        num_frames
-    )
+    # JJ: Add neighbor frames or simply duplicate each frame
+    if args.enforce_duplicate:
+        # Simple duplication: [f1, f1, f2, f2, ...]
+        sampled_indices = []
+        for idx in initial_sampled:
+            sampled_indices.extend([idx, idx])
+        print(f"[GPU {device_id}] Enforce duplicate mode: each frame duplicated")
+    else:
+        # Add neighbor frames in frame ID space
+        sampled_indices = add_neighbor_frames(
+            initial_sampled, 
+            args.neighbor_mode, 
+            args.fid_step_size, 
+            num_frames
+        )
     
     print(f"[GPU {device_id}] Temporal merge aware uniform: {n_prime} initial frames -> {len(sampled_indices)} final frames")
     print(f"[GPU {device_id}] Final sampled indices (frame IDs): {sampled_indices}")
@@ -1077,6 +1093,9 @@ if __name__ == "__main__":
                         help="Frame ID step size for mergeaware_uniform (operates on original video frame IDs).")
     parser.add_argument("--index_step_size", type=int, default=1,
                         help="Index step size for mergeaware_sa (operates on 128-frame pool indices).")
+    # JJ : Enforce duplicate mode for merge-aware sampling
+    parser.add_argument("--enforce_duplicate", action="store_true", default=False,
+                        help="[Merge-aware only] Enforce simple duplication (f1,f1,f2,f2,...) instead of neighbor frame logic")
     # JJ : Visualization options
     parser.add_argument("--visualize_sampling", action="store_true", default=False,
                         help="Generate sampling_quality.html visualization (disabled by default)")
@@ -1132,10 +1151,13 @@ if __name__ == "__main__":
             sampling_dir = f"{sampling_dir}_nbr{nbr_str}_idxss{args.index_step_size}"
 
         # udpate the single video output folder
+        original_output_folder = args.output_folder
         dir_sampling_dir, dataset_name = os.path.dirname(args.output_folder), os.path.basename(args.output_folder)
         dir_sampling_dir_updated = os.path.join(os.path.dirname(dir_sampling_dir), sampling_dir+'_single_video')
         args.output_folder = os.path.join(dir_sampling_dir_updated, dataset_name)
-        print(f"Single video mode: Output redirected to {args.output_folder}")
+        print(f"⚠️  Single video mode: ignoring user-specified --output_folder")
+        print(f"    User specified: {original_output_folder}")
+        print(f"    Actual output:  {args.output_folder}")
     else:
         all_videos = sorted(glob(os.path.join(args.video_folder, "*.mp4")))
     print('video path', args.video_path, args.video_folder)
