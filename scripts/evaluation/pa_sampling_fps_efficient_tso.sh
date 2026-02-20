@@ -39,6 +39,7 @@ BASE_DIR="${RESULTS_SAVE_ROOT}/vsibench"
 
 # Number of frames to sample
 NUM_FRAMES="${NUM_FRAMES:-16}"
+# NUM_FRAMES="${NUM_FRAMES:-8}"
 
 # Sampling type: "fps" or "efficient"
 SAMPLING_TYPE="${SAMPLING_TYPE:-fps}"
@@ -117,7 +118,7 @@ run_sampling() {
             python src/sampling/pa_sampling.py \
                 --video_path "$VIDEO_PATH" \
                 --model_path "${MODELS_ROOT}/Spatial-MLLM/checkpoints/VGGT-1B" \
-                --output_folder "${BASE_DIR}/${SAMPLING_TYPE}_sampling_${NUM_FRAMES}f/single_video" \
+                --output_folder "${BASE_DIR}/${SAMPLING_TYPE}_sampling_${NUM_FRAMES}f_single_video/${dataset}" \
                 --num_frames $NUM_FRAMES \
                 --sampling_type "$SAMPLING_TYPE" \
                 --predictions_root "${PREDICTIONS_ROOT}" \
@@ -130,7 +131,7 @@ run_sampling() {
             python src/sampling/pa_sampling.py \
                 --video_path "$VIDEO_PATH" \
                 --model_path "${MODELS_ROOT}/Spatial-MLLM/checkpoints/VGGT-1B" \
-                --output_folder "${BASE_DIR}/${SAMPLING_TYPE}_sampling_${NUM_FRAMES}f/single_video" \
+                --output_folder "${BASE_DIR}/${SAMPLING_TYPE}_sampling_${NUM_FRAMES}f_single_video/${dataset}" \
                 --num_frames $NUM_FRAMES \
                 --sampling_type "$SAMPLING_TYPE" \
                 --predictions_root "${PREDICTIONS_ROOT}" \

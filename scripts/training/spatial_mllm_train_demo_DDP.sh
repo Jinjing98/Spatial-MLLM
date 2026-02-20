@@ -1,4 +1,6 @@
 #!/bin/bash
+
+
 set -euo pipefail
 
 # Set environment variables
@@ -12,14 +14,14 @@ export NCCL_IB_DISABLE=1
 # DATASETS="spatial_mllm_mix_10_dbg" # default "spatial_mllm_mix_133k,route_plan_scannet_2k"
 
 DATASET_ROOT="/mnt/nct-zfs/TCO-All/SharedDatasets/SQA3D"  # Dataset root directory
-DATASETS="sqa3d_filtered_40k_small" # default "sqa3d_filtered_40k,sqa3d_filtered_40k_small"
+DATASETS="sqa3d_filtered_40k" # default "sqa3d_filtered_40k,sqa3d_filtered_40k_small"
 
 # DATASET_ROOT="/data/horse/ws/jixu233b-metadata_ws/datasets/vsibench"  # Dataset root directory
 # Export DATASET_ROOT for Python scripts (__init__.py) to use for data loading
 export DATASET_ROOT
 # JJ Freq Edit
 OUTPUT_ROOT="/mnt/nct-zfs/TCO-Test/jinjingxu/exps/train/spatialmllm"
-TRAIN_EPOCHS=5 # default 1 
+TRAIN_EPOCHS=1 # default 1 
 NUM_WORKERS=2 # default 8, set to 0 to avoid multiprocessing overhead
 NPROC_PER_NODE=2 # default 6 
 GRAD_ACCUM_STEPS=8 # JJ: reduced from 8 to match 4-sample debug dataset (4 samples / 2 GPUs = 2 per GPU)
@@ -28,9 +30,9 @@ VIDEO_MAX_FRAMES=16 # default 16
 VIDEO_MIN_FRAMES=16 # default 16
 VIDEO_FRAME_FPS=4 # default 4
 GRADIENT_CHECKPOINTING=True # default False
-MODEL_TYPE="custom-spatial-mllm" #"custom-spatial-mllm" # spatial-mllm
+MODEL_TYPE="spatial-mllm" #"custom-spatial-mllm" # spatial-mllm
 PRETRAINED_MODEL_NAME_OR_PATH="Qwen/Qwen2.5-VL-3B-Instruct"
-RUN_NAME_APPENDIX=""
+RUN_NAME_APPENDIX="_2x8_tso"
 
 # Distributed training configuration
 MASTER_ADDR=${MASTER_ADDR:-"127.0.0.1"}
