@@ -225,6 +225,8 @@ def custom_get_rope_index(
     position_ids_compute_mode: Optional[str] = 'mRoPE',
     selected_frames_id: Optional[List[int]] = None,
     temporal_patch_size: Optional[int] = 2,
+    adapt_strategy_with_temporal_merge: Optional[str] = 'mean',  # JJ: New parameter for frame aggregation strategy
+    readapted_scope_resolution: Optional[float] = 16.0,  # JJ: Fixed temporal resolution for mRoPE_readaptT
 ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
     """
     Calculate the 3D rope index based on image and video's temporal, height and width in LLM.
@@ -389,24 +391,58 @@ def custom_get_rope_index(
                 # Update range_tensor for other varients
                 if position_ids_compute_mode == 'mRoPE_woT':
                     range_tensor = torch.zeros_like(range_tensor)
+                    expanded_range = range_tensor.expand(-1, llm_grid_h * llm_grid_w)
+                    time_tensor = expanded_range * second_per_grid_t * temporal_patch_size #config.vision_config.tokens_per_second
                 elif position_ids_compute_mode == 'mRoPE_readaptT':
-                    adapt_range_tensor = torch.tensor(selected_frames_id).view(-1, temporal_patch_size).float().mean(dim=1)
-                    range_tensor = adapt_range_tensor.view(-1, 1)#.to(range_tensor.dtype)
-                    # JJ FIXME: we do this for strict compariable
-                    # scale factor to be comparibale with the sa img input [0,16] range
-                    scale_factor = 16.0 / (adapt_range_tensor.max()-adapt_range_tensor.min()+1)
-                    range_tensor = (range_tensor * scale_factor).to(range_tensor.dtype)
+                    # JJ: Validate temporal_patch_size for current strategies
+                    if temporal_patch_size != 2:
+                        raise NotImplementedError(
+                            f"mRoPE_readaptT with temporal_patch_size={temporal_patch_size} is not implemented. "
+                            f"Currently only temporal_patch_size=2 is supported. "
+                            f"If you need other temporal_patch_size values, please implement the corresponding "
+                            f"aggregation strategy in the 'adapt_strategy_with_temporal_merge' logic."
+                        )
+                    
+                    # JJ: Aggregate selected_frames_id based on strategy
+                    selected_frames_tensor = torch.tensor(selected_frames_id).view(-1, temporal_patch_size).float()
+                    
+                    if adapt_strategy_with_temporal_merge == 'mean':
+                        adapt_range_tensor = selected_frames_tensor.mean(dim=1)
+                    elif adapt_strategy_with_temporal_merge == 'first':
+                        adapt_range_tensor = selected_frames_tensor[:, 0]
+                    elif adapt_strategy_with_temporal_merge == 'last':
+                        adapt_range_tensor = selected_frames_tensor[:, -1]
+                    elif adapt_strategy_with_temporal_merge == 'median':
+                        # For temporal_patch_size=2, median is equivalent to mean
+                        adapt_range_tensor = selected_frames_tensor.median(dim=1)[0]
+                    else:
+                        raise ValueError(
+                            f"Unknown adapt_strategy_with_temporal_merge: {adapt_strategy_with_temporal_merge}. "
+                            f"Supported strategies: ['mean', 'first', 'last', 'median']"
+                        )
+                    
+                    range_tensor = adapt_range_tensor.view(-1, 1)
+                    
+                    # JJ: Fixed scale factor based on original frame_id range
+                    # Map [min_frame_id, max_frame_id] → [0, readapted_scope_resolution]
+                    # This provides consistent temporal encoding regardless of actual llm_grid_t
+                    original_min_frame = adapt_range_tensor.min()
+                    original_max_frame = adapt_range_tensor.max()
+                    original_frame_range = original_max_frame - original_min_frame
+                    
+                    scale_factor = readapted_scope_resolution / original_frame_range if original_frame_range > 0 else 1.0
+                    
+                    # Normalize to [0, readapted_scope_resolution]: first shift to start at 0, then scale
+                    range_tensor = (range_tensor - original_min_frame) * scale_factor
+                    range_tensor = range_tensor.to(range_tensor.dtype)
+                    expanded_range = range_tensor.expand(-1, llm_grid_h * llm_grid_w)
+                    
+                    # JJ: Use multiplier of 1 since we obtain t_pos from frame_id directly
+                    time_tensor = expanded_range * second_per_grid_t * 1
                 else:
                     assert position_ids_compute_mode in ['mRoPE'], f'Expected mRoPE_woT or mRoPE but got {position_ids_compute_mode}'
                     range_tensor = range_tensor
-
-                expanded_range = range_tensor.expand(-1, llm_grid_h * llm_grid_w)
-
-                # JJ FIXME: set as 1 / temporal_patch_size should be conceptually correct!
-                if position_ids_compute_mode == 'mRoPE_readaptT':
-                    time_tensor = expanded_range * second_per_grid_t * 1 # *1 as here we abtain t_pos from frame_id directly.
-                else:
-                    assert position_ids_compute_mode in ['mRoPE_woT', 'mRoPE'], f'Expected mRoPE_woT or mRoPE but got {position_ids_compute_mode}'
+                    expanded_range = range_tensor.expand(-1, llm_grid_h * llm_grid_w)
                     time_tensor = expanded_range * second_per_grid_t * temporal_patch_size #config.vision_config.tokens_per_second
 
                 time_tensor_long = time_tensor.long()
@@ -420,10 +456,7 @@ def custom_get_rope_index(
                 vision_len = llm_grid_t * llm_grid_h * llm_grid_w        
                 llm_visual_mask_list.append(torch.ones(vision_len, dtype=torch.long, device=input_ids.device))
                 # JJ: Temporarily disabled for cleaner loss debugging
-                # print(f'*'*20)
-                # print(f'Meta at rope position_ids_compute_mode: {position_ids_compute_mode}')
                 st = ed + vision_len #llm_grid_t * llm_grid_h * llm_grid_w
-                # print(f'ed, visual_len, text_len: {ed}, {vision_len}, {text_len}')
             
             # remaining trailing text
             if st < len(input_tokens):
