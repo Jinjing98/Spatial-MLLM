@@ -417,6 +417,35 @@ def main():
                     plot_pose_analysis=PLOT_POSE_ANALYSIS,  # JJ: Control pose_analysis.html generation
                     pose_source=pose_source  # JJ: Pass pose source for annotation
                 )
+            
+            # JJ: Test Lie scalar index computation for selected frames
+            print(f"\n  Testing Lie Scalar Index for selected {num_samples} frames:")
+            print(f"  {'-'*50}")
+            
+            # Import the function from pose_distance_metrics
+            import sys
+            sys.path.insert(0, str(Path(__file__).parent))
+            from pose_distance_metrics import compute_lie_scalar_index_torch
+            
+            # Extract selected poses and convert to torch tensor
+            selected_poses = poses[selected]
+            selected_poses_tensor = torch.from_numpy(selected_poses).float()
+            
+            # Test with different lambda_trans values
+            for lambda_trans in [0.1, 0.5, 1.0, 2.0, 5.0]:
+                P = compute_lie_scalar_index_torch(
+                    poses_c2w=selected_poses_tensor,
+                    lambda_trans=lambda_trans,
+                    traj_scale_norm=True,
+                    global_normalize=False,
+                    reorth_rot=True
+                )
+                
+                print(f"\n    lambda_trans = {lambda_trans}:")
+                print(f"      P shape: {P.shape}")
+                print(f"      P range: [{P.min().item():.4f}, {P.max().item():.4f}]")
+                print(f"      P mean: {P.mean().item():.4f}, std: {P.std().item():.4f}")
+                print(f"      Values: {[f'{v:.4f}' for v in P.tolist()]}")
     
     print("\n" + "="*60)
     print("✓ FPS testing complete!")
