@@ -33,6 +33,11 @@ class SpatialMLLMForConditionalGeneration(Qwen2_5_VLForConditionalGeneration):
 
         # Initialize weights and apply final processing
         self.post_init()
+        
+        # JJ: Track training step for NaN detection and debugging
+        self.global_step = 0
+        self.current_epoch = 0
+        self.debug_mode = True  # Enable detailed debugging
 
     def forward(
         self,
@@ -100,6 +105,23 @@ class SpatialMLLMForConditionalGeneration(Qwen2_5_VLForConditionalGeneration):
             output_hidden_states if output_hidden_states is not None else self.config.output_hidden_states
         )
         return_dict = return_dict if return_dict is not None else self.config.use_return_dict
+
+        # JJ: Track training progress (only increment during training with labels)
+        if labels is not None:
+            self.global_step += 1
+            # Debug: Check if labels contain valid targets (not all -100)
+            valid_labels = (labels != -100).sum().item()
+            if self.debug_mode and self.global_step % 10 == 0:  # Print every 10 steps
+                print(f"[Step {self.global_step}] Forward pass - Valid labels: {valid_labels}")
+            
+            # Critical check: if labels are provided but all are -100, loss will be 0
+            if valid_labels == 0:
+                print(f"\n{'='*60}")
+                print(f"[JJ-CRITICAL-WARNING] Step {self.global_step}")
+                print(f"[JJ-WARNING] All labels are -100! No valid training targets!")
+                print(f"[JJ-WARNING] This will result in loss = 0.0")
+                print(f"labels shape: {labels.shape}, all -100: {(labels == -100).all()}")
+                print(f"{'='*60}\n")
 
         if inputs_embeds is None:
             inputs_embeds = self.model.embed_tokens(input_ids)
@@ -176,6 +198,24 @@ class SpatialMLLMForConditionalGeneration(Qwen2_5_VLForConditionalGeneration):
             if attention_mask is not None:
                 attention_mask = attention_mask.to(inputs_embeds.device)
 
+        # JJ: Debug - Check inputs_embeds BEFORE model forward
+        if inputs_embeds is not None:
+            if torch.isnan(inputs_embeds).any():
+                print(f"\n{'='*60}")
+                print(f"[JJ-CRITICAL-ERROR] *** NaN DETECTED at Step {self.global_step} ***")
+                print(f"[JJ-ERROR] inputs_embeds contains NaN BEFORE model forward!")
+                print(f"[JJ-ERROR] NaN count in inputs_embeds: {torch.isnan(inputs_embeds).sum()}")
+                print(f"inputs_embeds shape: {inputs_embeds.shape}")
+                print(f"{'='*60}\n")
+                raise RuntimeError(
+                    f"[NaN DETECTED] inputs_embeds contains NaN at global_step={self.global_step}. "
+                    f"This indicates the problem occurred in spatial encoding or connector fusion."
+                )
+            elif self.debug_mode and self.global_step % 10 == 0:
+                print(f"[Step {self.global_step}] inputs_embeds stats - "
+                      f"min: {inputs_embeds.min():.4f}, max: {inputs_embeds.max():.4f}, "
+                      f"mean: {inputs_embeds.mean():.4f}")
+
         # if we get 4D attention mask we cannot calculate rope deltas anymore. TODO @raushan fixme
         if position_ids is None and (attention_mask is None or attention_mask.ndim == 2):
             # calculate RoPE index once per generation in the pre-fill stage only
@@ -224,7 +264,41 @@ class SpatialMLLMForConditionalGeneration(Qwen2_5_VLForConditionalGeneration):
         )
 
         hidden_states = outputs[0]
+        
+        # JJ: Debug - Check hidden_states for NaN/Inf AFTER model forward
+        if torch.isnan(hidden_states).any() or torch.isinf(hidden_states).any():
+            print(f"\n{'='*60}")
+            print(f"[JJ-CRITICAL-ERROR] NaN/Inf DETECTED at Step {self.global_step}")
+            print(f"[JJ-ERROR] hidden_states contains NaN or Inf AFTER model forward!")
+            print(f"NaN count: {torch.isnan(hidden_states).sum()}")
+            print(f"Inf count: {torch.isinf(hidden_states).sum()}")
+            print(f"hidden_states shape: {hidden_states.shape}")
+            print(f"{'='*60}\n")
+            raise RuntimeError(
+                f"[NaN DETECTED] hidden_states contains NaN at global_step={self.global_step}. "
+                f"This indicates the problem occurred INSIDE self.model() forward pass."
+            )
+        elif self.debug_mode and labels is not None and self.global_step % 10 == 0:
+            print(f"[Step {self.global_step}] hidden_states stats - "
+                  f"min: {hidden_states.min():.4f}, max: {hidden_states.max():.4f}")
+        
         logits = self.lm_head(hidden_states)
+        
+        # JJ: Debug - Check logits for NaN/Inf
+        if torch.isnan(logits).any() or torch.isinf(logits).any():
+            print(f"\n{'='*60}")
+            print(f"[JJ-CRITICAL-ERROR] NaN/Inf DETECTED at Step {self.global_step}")
+            print(f"[JJ-ERROR] logits contains NaN or Inf!")
+            print(f"NaN count: {torch.isnan(logits).sum()}")
+            print(f"Inf count: {torch.isinf(logits).sum()}")
+            print(f"logits shape: {logits.shape}")
+            print(f"{'='*60}\n")
+            raise RuntimeError(
+                f"[NaN DETECTED] logits contains NaN at global_step={self.global_step}."
+            )
+        elif self.debug_mode and labels is not None and self.global_step % 10 == 0:
+            print(f"[Step {self.global_step}] logits stats - "
+                  f"min: {logits.min():.4f}, max: {logits.max():.4f}")
 
         loss = None
         if labels is not None:
@@ -240,6 +314,42 @@ class SpatialMLLMForConditionalGeneration(Qwen2_5_VLForConditionalGeneration):
             # Enable model parallelism
             shift_labels = shift_labels.to(shift_logits.device)
             loss = loss_fct(shift_logits, shift_labels)
+            
+            # JJ: Check loss value and provide detailed diagnostics
+            if torch.isnan(loss) or torch.isinf(loss):
+                print(f"\n{'='*60}")
+                print(f"[JJ-CRITICAL-ERROR] NaN/Inf DETECTED at Step {self.global_step}")
+                print(f"[JJ-ERROR] Loss is NaN or Inf!")
+                print(f"[JJ-DEBUG-LOSS] labels != -100 count: {(labels != -100).sum().item()}")
+                print(f"[JJ-DEBUG-LOSS] shift_labels != -100 count: {(shift_labels != -100).sum().item()}")
+                print(f"shift_logits stats - min: {shift_logits.min()}, max: {shift_logits.max()}")
+                print(f"shift_logits NaN count: {torch.isnan(shift_logits).sum()}")
+                print(f"shift_logits Inf count: {torch.isinf(shift_logits).sum()}")
+                print(f"{'='*60}\n")
+                raise RuntimeError(
+                    f"[NaN DETECTED] Loss is NaN at global_step={self.global_step}."
+                )
+            elif self.debug_mode and self.global_step % 10 == 0:
+                valid_targets = (shift_labels != -100).sum().item()
+                print(f"[Step {self.global_step}] Loss: {loss.item():.6f}, "
+                      f"Valid targets: {valid_targets}")
+            
+            # JJ: Additional warning for zero loss (which is what we're seeing in the logs)
+            if loss.item() == 0.0:
+                print(f"\n{'='*60}")
+                print(f"[JJ-CRITICAL-WARNING] Step {self.global_step}")
+                print(f"[JJ-WARNING] *** Loss is exactly 0.0! ***")
+                print(f"[JJ-DEBUG] This usually means:")
+                print(f"  1. All labels are -100 (no valid training targets)")
+                print(f"  2. CrossEntropyLoss is not computing properly")
+                print(f"  3. shift_logits/shift_labels mismatch")
+                print(f"[JJ-DEBUG-DATA] labels shape: {labels.shape}")
+                print(f"[JJ-DEBUG-DATA] labels != -100 count: {(labels != -100).sum().item()}")
+                print(f"[JJ-DEBUG-DATA] shift_labels shape: {shift_labels.shape}")
+                print(f"[JJ-DEBUG-DATA] shift_labels != -100 count: {(shift_labels != -100).sum().item()}")
+                print(f"[JJ-DEBUG-DATA] shift_logits shape: {shift_logits.shape}")
+                print(f"[JJ-DEBUG-DATA] Sample shift_labels (first 20): {shift_labels[:20]}")
+                print(f"{'='*60}\n")
 
         if not return_dict:
             output = (logits,) + outputs[1:]

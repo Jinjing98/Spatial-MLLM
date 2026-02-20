@@ -72,11 +72,11 @@ class CustomSpatialMLLMForConditionalGeneration(Qwen2_5_VLForConditionalGenerati
 
         # NOTE JJ
         # RoPE pose id compute mode + THW dim T HACK
-        self.position_ids_compute_mode = "mRoPE_readaptT" # "mRoPE_readaptT" "mRoPE_woT"
+        self.position_ids_compute_mode = "mRoPE" # "mRoPE_readaptT" "mRoPE_woT"
         assert self.position_ids_compute_mode in ["mRoPE_woT", "mRoPE", "mRoPE_readaptT"]
         # RoPE attention in custom decoder layer
         self.RoPE_attn_mode = 'default' # 'PRoPE4VisionToken' # use position_ids
-        # self.RoPE_attn_mode = 'PRoPE4VisionToken' # 'PRoPE4VisionToken' # use position_ids
+        self.RoPE_attn_mode = 'PRoPE4VisionToken' # 'PRoPE4VisionToken' # use position_ids
         assert self.RoPE_attn_mode in ['default', 'PRoPE4VisionToken']
         # Used to indenty visual tokens for PRoPE
         self.visual_token_mask = None # directly aligned with position_ids len
@@ -270,75 +270,6 @@ class CustomSpatialMLLMForConditionalGeneration(Qwen2_5_VLForConditionalGenerati
                 self.visual_token_mask = visual_token_mask # JJ. Indicate in current tokens, what are the vision ones.
                 self.rope_deltas = rope_deltas
 
-                # JJ: DEBUG - Compare position_ids across different modes
-                if self.offline_debug:  # Force print for debugging
-                    print(f"\n{'='*70}")
-                    print(f"[JJ-DEBUG-ROPE] position_ids_compute_mode: {self.position_ids_compute_mode}")
-                    
-                    if video_grid_thw is not None and len(video_grid_thw) > 0:
-                        # Find visual token range
-                        visual_indices = torch.where(visual_token_mask[0] == 1)[0]
-                        if len(visual_indices) > 0:
-                            vis_start = visual_indices[0].item()
-                            vis_end = visual_indices[-1].item()
-                            
-                            # Grid info
-                            t_patches = video_grid_thw[0][0].item()
-                            h_patches = video_grid_thw[0][1].item() // 2  # spatial_merge_size=2
-                            w_patches = video_grid_thw[0][2].item() // 2
-                            tokens_per_t = h_patches * w_patches
-                            
-                            print(f"[JJ-DEBUG-ROPE] video_grid_thw: {video_grid_thw[0].tolist()}")
-                            print(f"[JJ-DEBUG-ROPE] Tokens per temporal patch: {tokens_per_t}")
-                            print(f"[JJ-DEBUG-ROPE] Visual token range: [{vis_start}, {vis_end}] ({len(visual_indices)} tokens)")
-                            
-                            # Extract T dimension position_ids (first dim of position_ids)
-                            t_pos_ids = position_ids[0, 0, :]  # [seq_len]
-                            
-                            # Sample T-pos for each temporal patch (first token of each patch)
-                            sampled_t_pos = []
-                            for t_idx in range(min(t_patches, 10)):  # Limit to 10 for readability
-                                token_idx = vis_start + t_idx * tokens_per_t
-                                if token_idx <= vis_end:
-                                    sampled_t_pos.append(t_pos_ids[token_idx].item())
-                            
-                            print(f"[JJ-DEBUG-ROPE] T-dimension pos_ids (first token of each temporal patch):")
-                            print(f"                {sampled_t_pos}")
-                            
-                            # Check if all T-pos are the same (mRoPE_woT characteristic)
-                            vision_t_pos = t_pos_ids[vis_start:vis_end+1]
-                            unique_t_vals = torch.unique(vision_t_pos).tolist()
-                            
-                            if len(unique_t_vals) == 1:
-                                print(f"[JJ-DEBUG-ROPE] ⚠️  All vision T-pos are IDENTICAL = {unique_t_vals[0]}")
-                                print(f"[JJ-DEBUG-ROPE]     → This is mRoPE_woT behavior")
-                            else:
-                                t_diffs = []
-                                for i in range(1, min(len(sampled_t_pos), 5)):
-                                    t_diffs.append(sampled_t_pos[i] - sampled_t_pos[i-1])
-                                print(f"[JJ-DEBUG-ROPE] ✓  Vision T-pos VARY: range=[{vision_t_pos.min().item()}, {vision_t_pos.max().item()}]")
-                                print(f"[JJ-DEBUG-ROPE]     Unique T values count: {len(unique_t_vals)}")
-                                print(f"[JJ-DEBUG-ROPE]     T-pos differences between patches: {t_diffs}")
-                                
-                                # Expected difference for standard mRoPE
-                                if self.position_ids_compute_mode == 'mRoPE':
-                                    if second_per_grid_ts is not None:
-                                        spg = second_per_grid_ts[0].item() if hasattr(second_per_grid_ts[0], 'item') else second_per_grid_ts[0]
-                                        expected_diff = int(spg * self.model.config.vision_config.temporal_patch_size)
-                                    else:
-                                        expected_diff = 50
-                                    print(f"[JJ-DEBUG-ROPE]     Expected diff for mRoPE: {expected_diff}")
-                                    if all(abs(d - expected_diff) < 5 for d in t_diffs):
-                                        print(f"[JJ-DEBUG-ROPE]     → Matches standard mRoPE pattern")
-                                    else:
-                                        print(f"[JJ-DEBUG-ROPE]     → DIFFERS from standard mRoPE! (readaptT effect?)")
-                                elif self.position_ids_compute_mode == 'mRoPE_readaptT':
-                                    if selected_frames is not None:
-                                        print(f"[JJ-DEBUG-ROPE]     selected_frames (first 16): {selected_frames[:16]}")
-                                        print(f"[JJ-DEBUG-ROPE]     selected_frames (last 8): {selected_frames[-8:]}")
-                    
-                    print(f"{'='*70}\n")
-
                 if self.offline_debug:
                     print(f"*"*20)
                     print(f"Details During Prefill:")
@@ -375,6 +306,7 @@ class CustomSpatialMLLMForConditionalGeneration(Qwen2_5_VLForConditionalGenerati
 
                 # JJ FIXME
                 self.visual_token_mask = torch.zeros_like(position_ids)[0]
+                print(f"Next Position_ids...") # 3, batch_size, 1
 
         # JJ: Track training progress (only increment during training with labels)
         if labels is not None:

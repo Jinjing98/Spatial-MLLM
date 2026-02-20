@@ -287,6 +287,104 @@ def calculate_metrics(results):
     }
 
 
+# JJ : LaTeX formatting functions for terminal output
+def format_latex_row_style1(metrics: Dict, model_name: str) -> str:
+    """Format metrics to LaTeX row - Style 1: simple with RelDir avg. Values are multiplied by 100 and shown as X.X format."""
+    per_qtype = metrics.get("per_question_type", {})
+    
+    def get_score(qtype: str) -> str:
+        return f"{per_qtype[qtype]['score'] * 100:.1f}" if qtype in per_qtype else "-"
+    
+    # Compute RelDir weighted average
+    reldir_types = ["object_rel_direction_easy", "object_rel_direction_medium", "object_rel_direction_hard"]
+    scores, counts = [], []
+    for qt in reldir_types:
+        if qt in per_qtype:
+            scores.append(per_qtype[qt]["score"])
+            counts.append(per_qtype[qt]["count"])
+    reldir_avg = sum(s * c for s, c in zip(scores, counts)) / sum(counts) if counts and sum(counts) > 0 else 0.0
+    
+    all_micro = metrics.get("all", {}).get("micro", 0.0)
+    
+    values = [
+        model_name,
+        get_score("object_counting"),
+        get_score("object_abs_distance"),
+        get_score("object_size_estimation"),
+        get_score("room_size_estimation"),
+        get_score("object_rel_distance"),
+        f"{reldir_avg * 100:.1f}",
+        get_score("route_planning"),
+        get_score("obj_appearance_order"),
+        f"{all_micro * 100:.1f}"
+    ]
+    return " & ".join(values) + " \\\\"
+
+
+def format_latex_row_style2(metrics: Dict, model_name: str) -> str:
+    """Format metrics to LaTeX row - Style 2: RelDir as easy/mid/hard in one cell. Values are multiplied by 100 and shown as X.X format."""
+    per_qtype = metrics.get("per_question_type", {})
+    
+    def get_score(qtype: str) -> str:
+        return f"{per_qtype[qtype]['score'] * 100:.1f}" if qtype in per_qtype else "-"
+    
+    # Get RelDir easy/mid/hard scores
+    reldir_easy = per_qtype.get("object_rel_direction_easy", {}).get("score", 0.0) * 100
+    reldir_mid = per_qtype.get("object_rel_direction_medium", {}).get("score", 0.0) * 100
+    reldir_hard = per_qtype.get("object_rel_direction_hard", {}).get("score", 0.0) * 100
+    reldir_combined = f"{reldir_easy:.1f}/{reldir_mid:.1f}/{reldir_hard:.1f}"
+    
+    mra_micro = metrics.get("mra", {}).get("micro", 0.0)
+    acc_micro = metrics.get("acc", {}).get("micro", 0.0)
+    all_micro = metrics.get("all", {}).get("micro", 0.0)
+    
+    values = [
+        model_name,
+        get_score("object_counting"),
+        get_score("object_abs_distance"),
+        get_score("object_size_estimation"),
+        get_score("room_size_estimation"),
+        get_score("object_rel_distance"),
+        reldir_combined,  # easy/mid/hard in one cell
+        get_score("route_planning"),
+        get_score("obj_appearance_order"),
+        f"{mra_micro * 100:.1f}",
+        f"{acc_micro * 100:.1f}",
+        f"{all_micro * 100:.1f}"
+    ]
+    return " & ".join(values) + " \\\\"
+
+
+def print_latex_results(metrics: Dict, model_name: str, dataset_metrics: Dict[str, Dict] = None):
+    """Print LaTeX formatted results to terminal."""
+    print("\n" + "="*80)
+    print("📋 LaTeX Formatted Results")
+    print("="*80)
+    
+    # Style 1
+    print("\n[Style 1: Simple with RelDir average]")
+    print("Model & ObjCnt & AbsDist & ObjSz & RoomSz & RelDist & RelDir & RoutePl & ApprOrd & Overall \\\\")
+    print("\\hline")
+    print(format_latex_row_style1(metrics, model_name))
+    
+    # Style 2
+    print("\n[Style 2: RelDir as E/M/H in one cell + MRA + ACC]")
+    print("Model & ObjCnt & AbsDist & ObjSz & RoomSz & RelDist & RelDir & RoutePl & ApprOrd & MRA & ACC & Overall \\\\")
+    print("\\hline")
+    print(format_latex_row_style2(metrics, model_name))
+    
+    # Per-dataset rows (Style 1)
+    if dataset_metrics:
+        print("\n[Per-Dataset Results (Style 1)]")
+        print("Model & ObjCnt & AbsDist & ObjSz & RoomSz & RelDist & RelDir & RoutePl & ApprOrd & Overall \\\\")
+        print("\\hline")
+        for dataset_name in sorted(dataset_metrics.keys()):
+            row = format_latex_row_style1(dataset_metrics[dataset_name], f"{model_name}-{dataset_name}")
+            print(row)
+    
+    print("="*80 + "\n")
+
+
 def evaluate_vsibench(vsi_data, model_type, model_path, batch_size, video_dir, output_path, video_nframes, sample_fps=None, use_visual=None, use_geo=None):
     """Evaluate model on a specific dataset. Forces batch size to 1."""
 
@@ -404,9 +502,20 @@ def main(args):
 
     # JJ : Metrics phase (skippable via --skip_metric)
     if not args.skip_metric:
+        # JJ : determine input directory for reading results (only use input_dir when --skip_eval)
+        if args.input_dir and args.skip_eval:
+            input_dir = Path(args.input_dir).resolve()
+            print(f"Reading existing results from: {input_dir}")
+        elif args.input_dir and not args.skip_eval:
+            print(f"Warning: --input_dir is ignored when not using --skip_eval. Reading from output_dir.")
+            input_dir = output_dir
+        else:
+            input_dir = output_dir
+            print(f"Reading results from output directory: {input_dir}")
+        
         # Load results from existing shard files
-        merged_results_path = output_dir / f"results_{args.model_type}.json"
-        shard_paths = sorted(output_dir.glob(f"results_{args.model_type}_*.json"))
+        merged_results_path = input_dir / f"results_{args.model_type}.json"
+        shard_paths = sorted(input_dir.glob(f"results_{args.model_type}_*.json"))
 
         final_output = []
         if shard_paths:
@@ -417,7 +526,40 @@ def main(args):
             with open(merged_results_path, "r") as f:
                 final_output = json.load(f)
         else:
-            print(f"Warning: No result files found in {output_dir} for model_type={args.model_type}.")
+            print(f"Warning: No result files found in {input_dir} for model_type={args.model_type}.")
+        
+        # JJ : raise error if no results found to prevent misleading all-zero metrics
+        if not final_output:
+            raise FileNotFoundError(
+                f"No result files found in {input_dir} for model_type={args.model_type}. "
+                f"Cannot compute metrics without evaluation results. "
+                f"Either run without --skip_eval to generate results, or check the input directory."
+            )
+
+        # JJ : filter results by datasets, question_types, scene_names (always apply for consistency)
+        original_count = len(final_output)
+        if args.datasets:
+            final_output = [res for res in final_output if res["sample"].get("dataset") in args.datasets]
+            print(f"Filtered by datasets {args.datasets}: {original_count} -> {len(final_output)} samples")
+        
+        if args.question_types:
+            original_count = len(final_output)
+            final_output = [res for res in final_output if res["sample"].get("question_type") in args.question_types]
+            print(f"Filtered by question_types {args.question_types}: {original_count} -> {len(final_output)} samples")
+        
+        if args.scene_names:
+            original_count = len(final_output)
+            final_output = [res for res in final_output if res["sample"].get("scene_name") in args.scene_names]
+            print(f"Filtered by scene_names {args.scene_names}: {original_count} -> {len(final_output)} samples")
+        
+        # JJ : if no samples after filtering, save empty metrics and proceed
+        if not final_output:
+            print(f"⚠️  Warning: No samples remain after filtering. Saving empty metrics.")
+            empty_metrics = calculate_metrics([])
+            save_json(merged_results_path, [])
+            save_json(output_dir / f"metrics_{args.model_type}.json", empty_metrics)
+            print(f"Finished evaluation for vsibench (no samples).")
+            return
 
         # JJ : re-compute reward with latest vsi_reward logic so --skip_eval picks up fixes
         for res in final_output:
@@ -440,7 +582,32 @@ def main(args):
             final_acc_dict,
         )
         print(f"Finished evaluation for vsibench.")
-        print(f"Final Metrics: {final_acc_dict}")
+        print(f"Final Metrics (Overall): {final_acc_dict}")
+        
+        # JJ : compute and save per-dataset metrics automatically
+        dataset_metrics_dict = {}
+        unique_datasets = sorted(set(res["sample"].get("dataset") for res in final_output if res["sample"].get("dataset")))
+        if unique_datasets:
+            print(f"\n📦 Computing per-dataset metrics for: {unique_datasets}")
+            for dataset in unique_datasets:
+                dataset_results = [res for res in final_output if res["sample"].get("dataset") == dataset]
+                if not dataset_results:
+                    # Skip empty dataset (should not happen, but defensive)
+                    print(f"  ⚠️  {dataset}: 0 samples, skipping")
+                    continue
+                dataset_metrics = calculate_metrics(dataset_results)
+                dataset_metrics_dict[dataset] = dataset_metrics
+                dataset_metrics_path = output_dir / f"metrics_{args.model_type}_{dataset}.json"
+                save_json(dataset_metrics_path, dataset_metrics)
+                print(f"  ✓ {dataset}: {len(dataset_results)} samples -> {dataset_metrics_path.name}")
+                print(f"    ACC: micro={dataset_metrics['acc']['micro']:.4f}, macro={dataset_metrics['acc']['macro']:.4f}")
+                print(f"    MRA: micro={dataset_metrics['mra']['micro']:.4f}, macro={dataset_metrics['mra']['macro']:.4f}")
+        else:
+            print(f"\n📦 No dataset information found in results.")
+        
+        # JJ : print LaTeX formatted results for easy copy-paste
+        print_latex_results(final_acc_dict, args.model_type, dataset_metrics_dict if dataset_metrics_dict else None)
+
     else:
         print("Skipping metrics computation (--skip_metric).")
 
@@ -468,6 +635,11 @@ if __name__ == "__main__":
     parser.add_argument("--output_dir", type=str, default="eval_results", help="Directory to save evaluation results.")
     parser.add_argument(
         "--output_name", type=str, default="eval_vsibench", help="Directory to save evaluation results."
+    )
+    # JJ : input_dir for --skip_eval to read from a different directory
+    parser.add_argument(
+        "--input_dir", type=str, default=None, 
+        help="Directory to read existing results from (used with --skip_eval). If not specified, defaults to output_dir/output_name."
     )
     parser.add_argument(
         "--question_types",
