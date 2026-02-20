@@ -1,4 +1,5 @@
 import glob
+import json
 import os
 import sys
 import time
@@ -14,10 +15,33 @@ sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from qwen_vl_utils import process_vision_info
 # JJ: import from common_utils
-from src.evaluation.utils.common_utils import load_model_and_processor, prepare_spatial_mllm_inputs
+from src.evaluation.utils.common_utils import load_model_and_processor, prepare_spatial_mllm_inputs, prepare_spatial_mllm_inputs_with_framesid
 from src.evaluation.utils.common_utils import construct_msg_qwen2_5_vl, construct_msg_qwen3_vl
 from src.evaluation.utils.common_utils import elaborate_batch_info_debug
 
+
+# JJ: Helper function to load selected_frames from json if exists
+def load_selected_frames_from_path(video_path: str):
+    """
+    Load selected_frames from selected_frames.json if it exists in the video_path directory.
+    
+    Args:
+        video_path: Path to video file or directory containing frames
+        
+    Returns:
+        List[int] or None: Selected frame indices if json file exists, None otherwise
+    """
+    # If video_path is a directory, look for selected_frames.json
+    if os.path.isdir(video_path):
+        json_path = os.path.join(video_path, "selected_frames.json")
+        if os.path.exists(json_path):
+            with open(json_path, 'r') as f:
+                data = json.load(f)
+                selected_frames = data.get("selected_frames", None)
+                if selected_frames is not None:
+                    print(f"[INFO] Loaded selected_frames from {json_path}: {selected_frames}")
+                    return selected_frames
+    return None
 
 
 def main(
@@ -82,13 +106,15 @@ def main(
 
     # JJ: elaborate the batch info for debug
     elaborate_batch_info_debug(processor, batch)
-
     # JJ elaborate the update
     if model_type in ["spatial-mllm"]:
         batch = prepare_spatial_mllm_inputs(batch, video_inputs, image_inputs)
     elif model_type in ["custom-spatial-mllm"]:
-        raise NotImplementedError("Custom Spatial MLLM is not implemented yet.")
-        batch = prepare_spatial_mllm_inputs(batch, video_inputs, image_inputs)
+        # JJ: Load selected_frames if available
+        selected_frames = load_selected_frames_from_path(video_path)
+        selected_frames_list = [selected_frames] if selected_frames is not None else None
+        # JJ: Use prepare_spatial_mllm_inputs_with_framesid for custom-spatial-mllm to support mRoPE_readaptT
+        batch = prepare_spatial_mllm_inputs_with_framesid(batch, video_inputs, image_inputs, selected_frames_list)
     elif model_type in ["qwen2.5-vl"]:
         pass # Remain as it is
     elif model_type in ["qwen3-vl"]:
