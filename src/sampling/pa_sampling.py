@@ -1337,6 +1337,9 @@ if __name__ == "__main__":
             )
             method_name = f"Efficient ({args.efficient_sampling_mode})"
         
+        # JJ: Sort selected indices to ensure temporal order
+        selected_indices = sorted(selected_indices)
+        
         print(f"  ✓ Selected {len(selected_indices)} frames: {selected_indices}")
         
         # ====================================================================
