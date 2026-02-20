@@ -11,7 +11,13 @@ fot HW style, we extend with P.
 -samples from other sampling stategies
 -base PE format: THW and HW
 
-19.02
+20.02
+Eval:
+qwen3 fps32
+
+Gen:
+hybrid 64
+
 
 18.02
 EVAL:

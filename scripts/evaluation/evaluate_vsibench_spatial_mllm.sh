@@ -44,8 +44,8 @@ pwd
 OUTPUT_ROOT="${RESULTS_SAVE_ROOT}/results/vsibench"
 mkdir -p "$OUTPUT_ROOT"
 
-MODEL_PATH="${MODELS_ROOT}/checkpoints/Spatial-MLLM-v1.1-Instruct-135K"
-MODEL_TYPE="spatial-mllm"
+# MODEL_PATH="${MODELS_ROOT}/checkpoints/Spatial-MLLM-v1.1-Instruct-135K"
+# MODEL_TYPE="spatial-mllm"
 # MODEL_TYPE="custom-spatial-mllm"
 # MODEL_TYPE="qwen2.5-vl"
 # MODEL_PATH='Qwen/Qwen2.5-VL-3B-Instruct'
@@ -57,13 +57,15 @@ MODEL_TYPE="spatial-mllm"
 # MODEL_TYPE="qwen2.5-vl"
 # MODEL_PATH="Qwen/Qwen2.5-VL-3B-Instruct"
 
-# MODEL_TYPE="qwen3-vl"
-# MODEL_PATH="Qwen/Qwen3-VL-2B-Instruct"
+MODEL_TYPE="qwen3-vl"
+MODEL_PATH="Qwen/Qwen3-VL-2B-Instruct"
 
 # MODEL_TYPE="spatial-mllm"
 
-MODEL_TYPE="custom-spatial-mllm"
-MODEL_PATH="Diankun/Spatial-MLLM-v1.1-Instruct-135K"
+# MODEL_TYPE="custom-spatial-mllm"
+# MODEL_PATH="Diankun/Spatial-MLLM-v1.1-Instruct-135K"
+
+
 MODEL_NAME=$(echo "$MODEL_PATH" | cut -d'/' -f2)
 
 
@@ -101,7 +103,7 @@ QUESTION_TYPES=("${QUESTION_TYPE_LIST[@]}") #all cases
 
 # nframes=(None)
 # nframes=(8)
-nframes=(16)
+nframes=(8 16 32)
 # nframes=(32)
 # sample_fps=(None)
 # sample_fps=(1)
@@ -119,7 +121,23 @@ done
 
 for nframe in "${nframes[@]}"; do
     TIMESTAMP=$(date +"%Y%m%d_%H%M%S")
+
+    # Be consistent with SA.sh 
+    # Build dataset suffix
+    DATASET_SUFFIX=""
+    if [ ${#DATASETS[@]} -ne ${#DATASET_LIST[@]} ]; then
+        DATASET_SUFFIX="_$(IFS=_; echo "${DATASETS[*]}")"
+    fi
+    # Build question type suffix
+    QUESTION_SUFFIX=""
+    if [ ${#QUESTION_TYPES[@]} -ne ${#QUESTION_TYPE_LIST[@]} ]; then
+        QUESTION_SUFFIX="_$(IFS=_; echo "${QUESTION_TYPES[*]}")"
+    fi
     EXP_DIR="${OUTPUT_ROOT}/${MODEL_NAME}-${nframe}f"
+    OUTPUT_NAME="eval_result${DATASET_SUFFIX}${QUESTION_SUFFIX}"
+    # JJ : Set input directory for --skip_eval to read from existing results
+    # EXISTING_INPUT_DIR="${EXP_DIR}/eval_result${DATASET_SUFFIX}${QUESTION_SUFFIX}"
+    EXISTING_INPUT_DIR="${EXP_DIR}/eval_result"
     LOG_FILE="${EXP_DIR}/run.log"
 
     mkdir -p "$EXP_DIR"
@@ -149,11 +167,12 @@ for nframe in "${nframes[@]}"; do
         --video_dir "${DATA_ROOT}/vsibench" \
         --batch_size 1 \
         --output_dir "$EXP_DIR" \
-        --output_name "eval_result" \
+        --output_name "$OUTPUT_NAME" \
+        --skip_eval --input_dir "$EXISTING_INPUT_DIR" \
         ${SCENE_NAME_LIST[@]:+--scene_names ${SCENE_NAME_LIST[@]}} \
         $EXTRA_ARGS \
         2>&1 | tee -a "$LOG_FILE"
-        
+
         # --sample_fps 0.01 \
 
     echo ">>> Experiment Finished. Results in $EXP_DIR"

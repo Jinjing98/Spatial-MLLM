@@ -27,8 +27,8 @@ SFT_MODELS_ROOT='/data/horse/ws/jixu233b-metadata_ws/exps/train/spatialmllm'
 
 # activate conda
 source /software/rapids/r24.10/Anaconda3/2024.02-1/etc/profile.d/conda.sh
-conda activate /data/horse/ws/jixu233b-3d_ws/envs/spatial-mllm
-# conda activate /data/horse/ws/jixu233b-3d_ws/envs/transformers_v5
+# conda activate /data/horse/ws/jixu233b-3d_ws/envs/spatial-mllm
+conda activate /data/horse/ws/jixu233b-3d_ws/envs/transformers_v5
 module load CUDA/12.4.0 # nvcc
 
 cd "$(dirname "$0")"
@@ -73,14 +73,14 @@ QUESTION_TYPE_LIST=(
 # MODEL_PATH="Qwen/Qwen2.5-VL-3B-Instruct"
 # MODEL_NAME_SUFFIX=""
 
-# MODEL_TYPE="qwen3-vl"
-# MODEL_PATH="Qwen/Qwen3-VL-2B-Instruct"
-# MODEL_NAME_SUFFIX=""
+MODEL_TYPE="qwen3-vl"
+MODEL_PATH="Qwen/Qwen3-VL-2B-Instruct"
+MODEL_NAME_SUFFIX=""
 
-MODEL_TYPE="custom-spatial-mllm"
-MODEL_PATH="Diankun/Spatial-MLLM-v1.1-Instruct-135K"
-MODEL_NAME_SUFFIX="adapted"
-MODEL_NAME_SUFFIX="woT"
+# MODEL_TYPE="custom-spatial-mllm"
+# MODEL_PATH="Diankun/Spatial-MLLM-v1.1-Instruct-135K"
+# MODEL_NAME_SUFFIX="adapted"
+# MODEL_NAME_SUFFIX="woT"
 # MODEL_NAME_SUFFIX="adapted_PRoPE"
 # MODEL_NAME_SUFFIX="pRoPE"
 
@@ -94,6 +94,7 @@ MODEL_NAME="${MODEL_TYPE}${MODEL_NAME_SUFFIX}"
 nframes=(32)
 # nframes=(16)
 # nframes=(8)
+# nframes=(8 16 32)
 
 # sample_fps=(None)
 # sample_fps=(1)
@@ -120,9 +121,11 @@ for nframe in "${nframes[@]}"; do
     # JJ
     # SAMPLING='sa_sampling'
     # MERGEAWARE_DETAILS=''
-    SAMPLING='efficient_sampling'
+    SAMPLING='fps_sampling'
     MERGEAWARE_DETAILS=''
-    # SAMPLING='fps_sampling'
+    # SAMPLING='efficient_sampling'
+    # MERGEAWARE_DETAILS=''
+    # SAMPLING='efficient_sampling_grid'
     # MERGEAWARE_DETAILS=''
     # SAMPLING='uniform_sampling'
     # MERGEAWARE_DETAILS=''
@@ -148,7 +151,12 @@ for nframe in "${nframes[@]}"; do
         QUESTION_SUFFIX="_$(IFS=_; echo "${QUESTION_TYPES[*]}")"
     fi
     
-    EXP_DIR="${OUTPUT_ROOT}/${MODEL_NAME}-${nframe}f${DATASET_SUFFIX}${QUESTION_SUFFIX}"
+    # EXP_DIR="${OUTPUT_ROOT}/${MODEL_NAME}-${nframe}f${DATASET_SUFFIX}${QUESTION_SUFFIX}"
+    EXP_DIR="${OUTPUT_ROOT}/${MODEL_NAME}-${nframe}f"
+    OUTPUT_NAME="eval_result${DATASET_SUFFIX}${QUESTION_SUFFIX}"
+    # JJ : Set input directory for --skip_eval to read from existing results
+    # EXISTING_INPUT_DIR="${EXP_DIR}/eval_result${DATASET_SUFFIX}${QUESTION_SUFFIX}"
+    EXISTING_INPUT_DIR="${EXP_DIR}/eval_result"
     LOG_FILE="${EXP_DIR}/run.log"
 
     mkdir -p "$EXP_DIR"
@@ -172,6 +180,7 @@ for nframe in "${nframes[@]}"; do
         EXTRA_ARGS="--scene_names ${SCENE_NAME_LIST[@]}"
     fi
     
+
     python /home/jixu233b/Projects/VLM_3D/SpatialMllmHallucinate/third_party/Spatial-MLLM/src/evaluation/vsibench/eval_vsibench.py \
         --model_path $MODEL_PATH \
         --model_type $MODEL_TYPE \
@@ -182,11 +191,11 @@ for nframe in "${nframes[@]}"; do
         --video_dir "${VIDEO_DIR}" \
         --batch_size 1 \
         --output_dir "$EXP_DIR" \
-        --output_name "eval_result" \
+        --output_name "$OUTPUT_NAME" \
         $EXTRA_ARGS \
         2>&1 | tee -a "$LOG_FILE"
+        # --skip_eval --input_dir "$EXISTING_INPUT_DIR" \
         
-        # --skip_eval \
         
     echo ">>> Experiment Finished. Results in $EXP_DIR"
 done
