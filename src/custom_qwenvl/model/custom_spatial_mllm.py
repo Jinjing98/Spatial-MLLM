@@ -72,8 +72,17 @@ class CustomSpatialMLLMForConditionalGeneration(Qwen2_5_VLForConditionalGenerati
 
         # NOTE JJ
         # RoPE pose id compute mode + THW dim T HACK
-        self.position_ids_compute_mode = "mRoPE" # "mRoPE_readaptT" "mRoPE_woT"
+        self.position_ids_compute_mode = "mRoPE_readaptT" # "mRoPE_readaptT" "mRoPE_woT"
         assert self.position_ids_compute_mode in ["mRoPE_woT", "mRoPE", "mRoPE_readaptT"]
+        
+        # JJ: Frame aggregation strategy for mRoPE_readaptT with temporal_patch_size > 1
+        # Options: 'mean', 'first', 'last', 'median'
+        self.adapt_strategy_with_temporal_merge = "mean"  # Default: average frame IDs within each temporal patch
+        
+        # JJ: Fixed temporal resolution for mRoPE_readaptT mode
+        # Maps frame_id range to [0, readapted_scope_resolution] for consistent temporal encoding
+        self.readapted_scope_resolution = 16.0  # Default: 16.0 for fairer temporal encoding across different frame sampling granularities
+        
         # RoPE attention in custom decoder layer
         self.RoPE_attn_mode = 'default' # 'PRoPE4VisionToken' # use position_ids
         self.RoPE_attn_mode = 'PRoPE4VisionToken' # 'PRoPE4VisionToken' # use position_ids
@@ -252,7 +261,7 @@ class CustomSpatialMLLMForConditionalGeneration(Qwen2_5_VLForConditionalGenerati
             ):
                 # JJ
                 assert self.position_ids_compute_mode in ["mRoPE_woT", "mRoPE", "mRoPE_readaptT"]
-                if self.position_ids_compute_mode == "mRoPE_readaptT":
+                if self.position_ids_compute_mode == "mRoPE":
                     assert selected_frames is not None, "`selected_frames` must be provided when `position_ids_compute_mode` is `mRoPE_readaptT`"
                 
                 position_ids, rope_deltas, visual_token_mask = custom_get_rope_index(
@@ -266,14 +275,16 @@ class CustomSpatialMLLMForConditionalGeneration(Qwen2_5_VLForConditionalGenerati
                     position_ids_compute_mode=self.position_ids_compute_mode,
                     selected_frames_id=selected_frames,
                     temporal_patch_size=self.model.config.vision_config.temporal_patch_size,
+                    adapt_strategy_with_temporal_merge=self.adapt_strategy_with_temporal_merge,  # JJ: New parameter
+                    readapted_scope_resolution=self.readapted_scope_resolution,  # JJ: Fixed temporal resolution for mRoPE_readaptT
                 )
                 self.visual_token_mask = visual_token_mask # JJ. Indicate in current tokens, what are the vision ones.
                 self.rope_deltas = rope_deltas
 
-                if self.offline_debug:
+                if self.offline_debug or True:
                     print(f"*"*20)
                     print(f"Details During Prefill:")
-                    print(f"image_grid_thw: {image_grid_thw}") # None
+                    # print(f"image_grid_thw: {image_grid_thw}") # None
                     print(f"video_grid_thw: {video_grid_thw}") # 8 46 34
                     print(f"second_per_grid_ts: {second_per_grid_ts}")
                     print(f"Prefill Position_ids:") # 3, batch_size, seq_length
@@ -287,7 +298,7 @@ class CustomSpatialMLLMForConditionalGeneration(Qwen2_5_VLForConditionalGenerati
                     print(f"({position_ids[:,0,15:3128+15:391]})") # 3, batch_size, seq_length
                     # print(f"Visual token mask: {self.visual_token_mask[0,1500:3000:125]}")
                     print(f"Later (Most) Position_ids:")
-                    print(f"({position_ids[:,0,30:]})") # 3, batch_size, seq_length
+                    print(f"({position_ids[:,0,1580+15:1580+15+10]})") # 3, batch_size, seq_length
                     # print(f"Visual token mask: {self.visual_token_mask[0, -10:]}")
 
             # then use the prev pre-calculated rope-deltas to get the correct position ids
@@ -297,6 +308,10 @@ class CustomSpatialMLLMForConditionalGeneration(Qwen2_5_VLForConditionalGenerati
                 delta = (
                     (cache_position[0] + self.rope_deltas).to(inputs_embeds.device) if cache_position is not None else 0
                 )
+                if self.offline_debug:
+                    print('cache position[0]: ', cache_position[0])
+                    print('rope deltas: ', self.rope_deltas)
+                    print('delta: ', delta)
                 position_ids = torch.arange(seq_length, device=inputs_embeds.device)
                 position_ids = position_ids.view(1, -1).expand(batch_size, -1)
                 if cache_position is not None:  # otherwise `deltas` is an int `0`
@@ -306,7 +321,6 @@ class CustomSpatialMLLMForConditionalGeneration(Qwen2_5_VLForConditionalGenerati
 
                 # JJ FIXME
                 self.visual_token_mask = torch.zeros_like(position_ids)[0]
-                print(f"Next Position_ids...") # 3, batch_size, 1
 
         # JJ: Track training progress (only increment during training with labels)
         if labels is not None:
