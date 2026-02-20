@@ -78,9 +78,9 @@ class CustomSpatialMLLMForConditionalGeneration(Qwen2_5_VLForConditionalGenerati
         # JJ: Frame aggregation strategy for mRoPE_readaptT with temporal_patch_size > 1
         # Options: 'mean', 'first', 'last', 'median'
         self.adapt_strategy_with_temporal_merge = "mean"  # Default: average frame IDs within each temporal patch
-        
-        # JJ: Fixed temporal resolution for mRoPE_readaptT mode
-        # Maps frame_id range to [0, readapted_scope_resolution] for consistent temporal encoding
+        # This is consistent with mrope design for fair comparision
+        self.readapted_do_dynamic_scope = True  # Default: True, use T-length (llm_grid_t) related scaling
+        # this setting will enfoce the garnularity is not sensitive to input frames num.Maps frame_id range to [0, readapted_scope_resolution] for consistent temporal encoding
         self.readapted_scope_resolution = 16.0  # Default: 16.0 for fairer temporal encoding across different frame sampling granularities
         
         # RoPE attention in custom decoder layer
@@ -276,12 +276,13 @@ class CustomSpatialMLLMForConditionalGeneration(Qwen2_5_VLForConditionalGenerati
                     selected_frames_id=selected_frames,
                     temporal_patch_size=self.model.config.vision_config.temporal_patch_size,
                     adapt_strategy_with_temporal_merge=self.adapt_strategy_with_temporal_merge,  # JJ: New parameter
+                    readapted_do_dynamic_scope=self.readapted_do_dynamic_scope,  # JJ: Dynamic scope flag
                     readapted_scope_resolution=self.readapted_scope_resolution,  # JJ: Fixed temporal resolution for mRoPE_readaptT
                 )
                 self.visual_token_mask = visual_token_mask # JJ. Indicate in current tokens, what are the vision ones.
                 self.rope_deltas = rope_deltas
 
-                if self.offline_debug or True:
+                if self.offline_debug:
                     print(f"*"*20)
                     print(f"Details During Prefill:")
                     # print(f"image_grid_thw: {image_grid_thw}") # None

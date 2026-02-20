@@ -226,7 +226,8 @@ def custom_get_rope_index(
     selected_frames_id: Optional[List[int]] = None,
     temporal_patch_size: Optional[int] = 2,
     adapt_strategy_with_temporal_merge: Optional[str] = 'mean',  # JJ: New parameter for frame aggregation strategy
-    readapted_scope_resolution: Optional[float] = 16.0,  # JJ: Fixed temporal resolution for mRoPE_readaptT
+    readapted_do_dynamic_scope: Optional[bool] = True,  # JJ: Use dynamic scope (llm_grid_t-based) for mRoPE_readaptT
+    readapted_scope_resolution: Optional[float] = 16.0,  # JJ: Fixed temporal resolution for mRoPE_readaptT (when readapted_do_dynamic_scope=False)
 ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
     """
     Calculate the 3D rope index based on image and video's temporal, height and width in LLM.
@@ -423,16 +424,24 @@ def custom_get_rope_index(
                     
                     range_tensor = adapt_range_tensor.view(-1, 1)
                     
-                    # JJ: Fixed scale factor based on original frame_id range
-                    # Map [min_frame_id, max_frame_id] → [0, readapted_scope_resolution]
-                    # This provides consistent temporal encoding regardless of actual llm_grid_t
+                    # JJ: Two scaling strategies for mRoPE_readaptT
+                    if readapted_do_dynamic_scope:
+                        # Dynamic: Map to [0, llm_grid_t-1] based on current video's temporal dimension
+                        # This ensures position IDs span the full temporal range available
+                        target_max_t_pos = (llm_grid_t * temporal_patch_size - 1)
+                    else:
+                        # Fixed: Map to [0, readapted_scope_resolution] for consistent encoding
+                        # This provides fair temporal encoding across different sampling granularities
+                        target_max_t_pos = readapted_scope_resolution
+                    
+                    # Apply linear mapping: [min_frame_id, max_frame_id] → [0, target_max_t_pos]
                     original_min_frame = adapt_range_tensor.min()
                     original_max_frame = adapt_range_tensor.max()
                     original_frame_range = original_max_frame - original_min_frame
                     
-                    scale_factor = readapted_scope_resolution / original_frame_range if original_frame_range > 0 else 1.0
+                    scale_factor = target_max_t_pos / original_frame_range if original_frame_range > 0 else 1.0
                     
-                    # Normalize to [0, readapted_scope_resolution]: first shift to start at 0, then scale
+                    # Normalize: first shift to start at 0, then scale to target range
                     range_tensor = (range_tensor - original_min_frame) * scale_factor
                     range_tensor = range_tensor.to(range_tensor.dtype)
                     expanded_range = range_tensor.expand(-1, llm_grid_h * llm_grid_w)
