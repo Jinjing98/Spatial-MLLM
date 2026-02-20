@@ -1306,6 +1306,34 @@ if __name__ == '__main__':
             translation_unit='normalized'
         )
         
+        # JJ: Test Lie scalar index computation
+        print("\n" + "=" * 80)
+        print("Testing Lie Scalar Index Computation")
+        print("=" * 80)
+        
+        import torch
+        from pose_distance_metrics import compute_lie_scalar_index_torch
+        
+        # Convert to torch tensor
+        poses_array = np.array(poses_numpy)
+        poses_tensor = torch.from_numpy(poses_array).float()
+        
+        # Test with different lambda_trans values
+        for lambda_trans in [0.1, 0.5, 1.0, 2.0, 5.0]:
+            P = compute_lie_scalar_index_torch(
+                poses_c2w=poses_tensor,
+                lambda_trans=lambda_trans,
+                traj_scale_norm=True,
+                global_normalize=True,
+                reorth_rot=True
+            )
+            
+            print(f"\nlambda_trans = {lambda_trans}:")
+            print(f"  P shape: {P.shape}")
+            print(f"  P range: [{P.min().item():.4f}, {P.max().item():.4f}]")
+            print(f"  P mean: {P.mean().item():.4f}, std: {P.std().item():.4f}")
+            print(f"  Values: {[f'{v:.4f}' for v in P.tolist()]}")
+        
         print("\n" + "=" * 80)
         print("✓ Real data visualization completed!")
         print("=" * 80)
@@ -1392,6 +1420,39 @@ if __name__ == '__main__':
             show=False,
             translation_unit='m'
         )
+        
+        # JJ: Test Lie scalar index computation for synthetic trajectories
+        print("\n" + "=" * 80)
+        print("Testing Lie Scalar Index for Synthetic Trajectories")
+        print("=" * 80)
+        
+        import torch
+        from pose_distance_metrics import compute_lie_scalar_index_torch
+        
+        # Test all 3 trajectories
+        trajectories = [
+            ("Trajectory 1: Loop Closure", traj1_poses),
+            ("Trajectory 2: Linear Translation", traj2_poses),
+            ("Trajectory 3: Rotation then Translation", traj3_poses)
+        ]
+        
+        for traj_name, traj_poses in trajectories:
+            print(f"\n[{traj_name}]")
+            traj_array = np.array(traj_poses)
+            traj_tensor = torch.from_numpy(traj_array).float()
+            
+            for lambda_trans in [0.1, 0.5, 1.0, 2.0, 5.0]:
+                P = compute_lie_scalar_index_torch(
+                    poses_c2w=traj_tensor,
+                    lambda_trans=lambda_trans,
+                    traj_scale_norm=True,
+                    global_normalize=True,
+                    reorth_rot=True
+                )
+                print(f"\n  lambda_trans = {lambda_trans}:")
+                print(f"    P range: [{P.min().item():.4f}, {P.max().item():.4f}]")
+                print(f"    P mean: {P.mean().item():.4f}, std: {P.std().item():.4f}")
+                print(f"    First 10: {[f'{v:.4f}' for v in P[:].tolist()]}")
         
         print("\n" + "=" * 80)
         print("✓ All synthetic trajectories generated successfully!")

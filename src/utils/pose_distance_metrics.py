@@ -312,3 +312,71 @@ def _rotation_matrix_to_angle_torch(R: torch.Tensor) -> torch.Tensor:
     cos_angle = torch.clamp((trace - 1) / 2, -1.0, 1.0)
     angle = torch.acos(cos_angle)
     return angle
+
+
+def compute_lie_scalar_index_torch(
+    poses_c2w: torch.Tensor,
+    lambda_trans: float = 1.0, # JJ FIXME. MAY NEED TO TUNE
+    traj_scale_norm: bool = True,
+    global_normalize: bool = True,
+    global_normalize_scale_factor: float = 16.0, #JJ FIXME 16.0 is related to training stas.
+    reorth_rot: bool = True
+) -> torch.Tensor:
+    """
+    Compute Lie-style scalar index for each pose relative to the first frame.
+
+    P_t = sqrt( theta_t^2 + (lambda_trans^2) * d_t^2 )
+
+    Notes:
+        - traj_scale_norm: normalize translation per trajectory to [0,1] to
+          make lambda_trans weighting consistent across trajectories.
+        - global_normalize: optional, normalize final P to [0,1] for phase modulation.
+        - global_normalize_scale_factor: scale factor applied after global normalization
+        - translation_scale inside compute_pose_farness_torch is set to None
+          to disable internal auto-scaling; we handle normalization explicitly.
+
+    Args:
+        poses_c2w: (N,4,4) camera-to-world poses
+        lambda_trans: balance weight between rotation and translation
+        traj_scale_norm: whether to normalize translation per trajectory (internal)
+        global_normalize: optional normalize final P to [0,1] after lambda weighting
+        global_normalize_scale_factor: scale factor applied after normalization (default: 16.0)
+        reorth_rot: whether to re-orthogonalize rotations
+
+    Returns:
+        P: (N,) tensor, scalar index per frame
+    """
+
+    # ------------------ REUSE ------------------
+    # Use existing farness computation, disable internal translation scaling
+    farness_trans, farness_rot = compute_pose_farness_torch(
+        poses_c2w,
+        trans_metric_mode='euclidean',
+        rot_metric_mode='angle_axis',
+        reorth_rot=reorth_rot,
+        translation_scale=None  # disable auto-scaling inside function n doing externllay
+    )
+    device = poses_c2w.device
+    trans = torch.tensor(farness_trans, device=device)
+    rot = torch.tensor(farness_rot, device=device)
+    # ------------------ END REUSE ------------------
+
+    # ------------------ NEW: per-trajectory translation normalization ------------------
+    if traj_scale_norm:
+        max_trans = trans.max()
+        if max_trans > 0:
+            trans = trans / max_trans  # unify translation scale across trajectory
+    # ------------------ END NEW ------------------
+
+    # ------------------ NEW: fuse rotation and translation into scalar P ------------------
+    P = torch.sqrt(rot**2 + (lambda_trans**2) * trans**2)
+    # ------------------ END NEW ------------------
+
+    # ------------------ NEW: optional global normalization for phase modulation ------------------
+    if global_normalize:
+        max_val = P.max()
+        if max_val > 0:
+            P = P / max_val * global_normalize_scale_factor
+    # ------------------ END NEW ------------------
+
+    return P
