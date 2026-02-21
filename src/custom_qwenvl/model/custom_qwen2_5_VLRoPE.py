@@ -567,8 +567,11 @@ def custom_get_pose_rope_index(
             pose_scale_factor: scale factor for Pose normalization [0, scale_factor]
             pose_merge_strategy: aggregation strategy for pose patches ('mean', 'first', 'last', 'median')
             pose_use_dynamic_scale_factor: use dynamic scale based on pose count
-            pose_anchor_rereference_strategy: re-reference all poses to first frame
+            pose_anchor_rereference_strategy: re-reference all poses to anchor frame ('first', 'medoid')
             pose_id_scalar_lambda_trans: balance weight between rotation and translation in Lie scalar
+                - Affects (1) medoid selection: which frame is chosen as geometric center
+                - Affects (2) P value ordering: relative distances of all frames to reference
+                - Lambda > 1: emphasize translation, Lambda < 1: emphasize rotation
             hard_reset_reference_after_pose_merge: re-normalize after aggregation
             do_offset_in_pose_pos_id: add sequential offset to Pose dimension
         
@@ -618,11 +621,14 @@ def custom_get_pose_rope_index(
         ref_frame_idx = 0
     elif pose_anchor_rereference_strategy == 'medoid':
         # Use medoid frame as anchor (frame with minimum sum of distances to all others)
-        # Compute pairwise Lie scalar distances between all poses
+        # NOTE: Uses pose_id_scalar_lambda_trans to ensure consistent distance metric
+        #       This affects: (1) which frame is selected as medoid
+        #                     (2) ensures P value ordering matches medoid selection criterion
         N = selected_frames_poses.shape[0]
         device = selected_frames_poses.device
         
         # Compute distance matrix: D[i,j] = distance between pose i and pose j
+        # Using same Lie scalar metric as compute_lie_scalar_index_torch
         distance_matrix = torch.zeros(N, N, device=device)
         for i in range(N):
             for j in range(N):
@@ -631,8 +637,7 @@ def custom_get_pose_rope_index(
                     pose_i_w2c = torch.linalg.inv(selected_frames_poses[i])
                     pose_rel = pose_i_w2c @ selected_frames_poses[j]
                     
-                    # Compute Lie scalar distance (rotation angle + translation norm)
-                    # Use simplified distance: sqrt(theta^2 + d^2)
+                    # Compute Lie scalar distance (rotation angle + weighted translation)
                     R_rel = pose_rel[:3, :3]
                     t_rel = pose_rel[:3, 3]
                     
@@ -645,8 +650,11 @@ def custom_get_pose_rope_index(
                     # Translation distance
                     d_trans = torch.norm(t_rel)
                     
-                    # Combined distance (same weighting as in compute_lie_scalar_index_torch)
-                    distance_matrix[i, j] = torch.sqrt(theta**2 + d_trans**2)
+                    # Combined distance with pose_id_scalar_lambda_trans weighting
+                    # Same formula as in compute_lie_scalar_index_torch
+                    distance_matrix[i, j] = torch.sqrt(
+                        theta**2 + (pose_id_scalar_lambda_trans**2) * d_trans**2
+                    )
         
         # Find medoid: frame with minimum sum of distances
         dist_sums = distance_matrix.sum(dim=1)  # (N,)
@@ -662,9 +670,12 @@ def custom_get_pose_rope_index(
 
     # ------------------ REUSE: compute Pose index (P) via Lie scalar ------------------
     # P shape: (num_frames,), range: [0, 1] if global_normalize=True
+    # NOTE: Using same pose_id_scalar_lambda_trans as medoid selection to ensure:
+    #       (1) Medoid selection criterion matches the final distance metric
+    #       (2) P value ordering is consistent with the chosen anchor frame
     P = compute_lie_scalar_index_torch(
         poses_c2w=selected_frames_poses,
-        pose_id_scalar_lambda_trans=pose_id_scalar_lambda_trans,  # JJ: Renamed parameter
+        pose_id_scalar_lambda_trans=pose_id_scalar_lambda_trans,  # Same weighting as medoid selection
         traj_scale_norm=True,
         global_normalize=True,
         reorth_rot=True,
