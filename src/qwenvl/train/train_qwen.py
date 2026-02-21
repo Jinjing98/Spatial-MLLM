@@ -44,6 +44,47 @@ from src.qwenvl.train.argument import DataArguments, ModelArguments, TrainingArg
 from src.qwenvl.train.trainer import replace_qwen2_vl_attention_class
 
 
+# JJ: Add reproducibility control
+def set_seed_for_reproducibility(seed=42):
+    """
+    Set seed for reproducibility across Python, NumPy, PyTorch, and CUDA.
+    
+    Args:
+        seed: Random seed value (default: 42)
+    """
+    import random
+    import numpy as np
+    
+    # Python random
+    random.seed(seed)
+    
+    # NumPy
+    np.random.seed(seed)
+    
+    # PyTorch
+    torch.manual_seed(seed)
+    torch.cuda.manual_seed(seed)
+    torch.cuda.manual_seed_all(seed)  # For multi-GPU
+    
+    # CUDA deterministic behavior
+    torch.backends.cudnn.deterministic = True
+    torch.backends.cudnn.benchmark = False
+    
+    # PyTorch DataLoader worker seed
+    def seed_worker(worker_id):
+        worker_seed = torch.initial_seed() % 2**32
+        np.random.seed(worker_seed)
+        random.seed(worker_seed)
+    
+    print(f"[INFO] ========================================")
+    print(f"[INFO] Reproducibility seed set to: {seed}")
+    print(f"[INFO] - torch.backends.cudnn.deterministic = True")
+    print(f"[INFO] - torch.backends.cudnn.benchmark = False")
+    print(f"[INFO] ========================================")
+    
+    return seed_worker  # Return for use in DataLoader
+
+
 def safe_save_model_for_hf_trainer(trainer: transformers.Trainer, output_dir: str):
     """Collects the state dict and dump to disk."""
 
@@ -197,6 +238,9 @@ def train(attn_implementation="flash_attention_2"):
 
     local_rank = training_args.local_rank
     os.makedirs(training_args.output_dir, exist_ok=True)
+    
+    # JJ: Set seed for reproducibility
+    seed_worker = set_seed_for_reproducibility(seed=training_args.seed)
 
     model, image_processor = get_model(
         model_args=model_args,
@@ -206,6 +250,19 @@ def train(attn_implementation="flash_attention_2"):
     )
     data_args.image_processor = image_processor
     data_args.model_type = model_args.model_type
+
+    # 🆕 NEW: Apply Pose RoPE monkey patch for custom-spatial-mllm
+    if "custom-spatial-mllm" in model_args.model_type.lower() and model_args.use_pose_rope:
+        from src.custom_qwenvl.model.custom_spatial_mllm_pose_rope import patch_model_with_pose_rope
+        model = patch_model_with_pose_rope(
+            model,
+            use_pose_rope=True,
+            pose_enc_type=model_args.pose_enc_type,
+            # Note: All Temporal & Pose parameters are inherited from model.__init__
+        )
+        print(f"[Training] ✅ Monkey patch applied: Model now uses 4D Pose-aware RoPE (P+T+H+W)")
+    elif "custom-spatial-mllm" in model_args.model_type.lower() and not model_args.use_pose_rope:
+        print(f"[Training] ℹ️  Using standard 3D mRoPE (T+H+W)")
 
     model.config.use_cache = False
 

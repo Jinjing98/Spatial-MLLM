@@ -97,8 +97,8 @@ MODEL_TYPE="spatial-mllm"
 MODEL_TYPE="qwen3-vl"
 MODEL_PATH="Qwen/Qwen3-VL-2B-Instruct"
 # MODEL_TYPE="spatial-mllm"
-# MODEL_TYPE="custom-spatial-mllm"
-# MODEL_PATH="Diankun/Spatial-MLLM-v1.1-Instruct-135K"
+MODEL_TYPE="custom-spatial-mllm"
+MODEL_PATH="Diankun/Spatial-MLLM-v1.1-Instruct-135K"
 MODEL_NAME_SUFFIX=""
 
 MODEL_NAME="${MODEL_TYPE}${MODEL_NAME_SUFFIX}"
@@ -184,6 +184,7 @@ for nframe in "${nframes[@]}"; do
         --video_dir "${DATA_ROOT}/vsibench/sa_sampling_${nframe}f" \
         --batch_size 1 \
         --output_dir "$EXP_DIR" \
+        --use_pose_rope \
         --output_name "eval_result" \
         $EXTRA_ARGS \
         2>&1 | tee -a "$LOG_FILE"

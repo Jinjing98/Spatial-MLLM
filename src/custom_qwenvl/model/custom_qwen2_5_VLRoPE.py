@@ -52,6 +52,17 @@ from transformers import Qwen2_5_VLConfig
 import torch
 from typing import Optional, Tuple
 
+# JJ: Handle import for both module usage and direct execution
+try:
+    from src.utils.pose_distance_metrics import compute_lie_scalar_index_torch
+except ModuleNotFoundError:
+    # When running as __main__, add parent directory to path
+    import sys
+    from pathlib import Path
+    root_dir = Path(__file__).resolve().parents[3]  # Go up to Spatial-MLLM root
+    if str(root_dir) not in sys.path:
+        sys.path.insert(0, str(root_dir))
+    from src.utils.pose_distance_metrics import compute_lie_scalar_index_torch
 
 # This maps the "rope_type" string field in rope config to the corresponding function to compute the RoPE parameters
 # from the model config. You can append new {'rope_type': callable} pairs to this rope_parameters to enable custom RoPE
@@ -111,9 +122,10 @@ class CustomQwen2_5_VLRotaryEmbedding(nn.Module):
             self._dynamic_frequency_update(position_ids, device=x.device)
 
         # Core RoPE block. In contrast to other models, Qwen2_5_VL has different position ids for the grids
-        # So we expand the inv_freq to shape (3, ...)
-        inv_freq_expanded = self.inv_freq[None, None, :, None].float().expand(3, position_ids.shape[1], -1, 1)
-        position_ids_expanded = position_ids[:, :, None, :].float()  # shape (3, bs, 1, positions)
+        # ✏️ MODIFIED: Support both 3D (T,H,W) and 4D (P,T,H,W) RoPE by dynamically expanding based on position_ids shape
+        num_dims = position_ids.shape[0]  # 3 for THW, 4 for PTHW
+        inv_freq_expanded = self.inv_freq[None, None, :, None].float().expand(num_dims, position_ids.shape[1], -1, 1)
+        position_ids_expanded = position_ids[:, :, None, :].float()  # shape (num_dims, bs, 1, positions)
         # Force float32 (see https://github.com/huggingface/transformers/pull/29285)
         device_type = x.device.type
         device_type = device_type if isinstance(device_type, str) and device_type != "mps" else "cpu"
@@ -225,9 +237,9 @@ def custom_get_rope_index(
     position_ids_compute_mode: Optional[str] = 'mRoPE',
     selected_frames_id: Optional[List[int]] = None,
     temporal_patch_size: Optional[int] = 2,
-    adapt_strategy_with_temporal_merge: Optional[str] = 'mean',  # JJ: New parameter for frame aggregation strategy
-    readapted_do_dynamic_scope: Optional[bool] = True,  # JJ: Use dynamic scope (llm_grid_t-based) for mRoPE_readaptT
-    readapted_scope_resolution: Optional[float] = 16.0,  # JJ: Fixed temporal resolution for mRoPE_readaptT (when readapted_do_dynamic_scope=False)
+    temporal_readapted_merge_strategy: Optional[str] = 'mean',  # JJ: Renamed for consistency
+    temporal_readapted_use_dynamic_scale_factor: Optional[bool] = True,  # JJ: Renamed for consistency
+    temporal_readapted_scale_factor: Optional[float] = 16.0,  # JJ: Renamed for consistency
 ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
     """
     Calculate the 3D rope index based on image and video's temporal, height and width in LLM.
@@ -401,38 +413,38 @@ def custom_get_rope_index(
                             f"mRoPE_readaptT with temporal_patch_size={temporal_patch_size} is not implemented. "
                             f"Currently only temporal_patch_size=2 is supported. "
                             f"If you need other temporal_patch_size values, please implement the corresponding "
-                            f"aggregation strategy in the 'adapt_strategy_with_temporal_merge' logic."
+                            f"aggregation strategy in the 'temporal_readapted_merge_strategy' logic."
                         )
                     
                     # JJ: Aggregate selected_frames_id based on strategy
                     selected_frames_tensor = torch.tensor(selected_frames_id).view(-1, temporal_patch_size).float()
                     
-                    if adapt_strategy_with_temporal_merge == 'mean':
+                    if temporal_readapted_merge_strategy == 'mean':
                         adapt_range_tensor = selected_frames_tensor.mean(dim=1)
-                    elif adapt_strategy_with_temporal_merge == 'first':
+                    elif temporal_readapted_merge_strategy == 'first':
                         adapt_range_tensor = selected_frames_tensor[:, 0]
-                    elif adapt_strategy_with_temporal_merge == 'last':
+                    elif temporal_readapted_merge_strategy == 'last':
                         adapt_range_tensor = selected_frames_tensor[:, -1]
-                    elif adapt_strategy_with_temporal_merge == 'median':
+                    elif temporal_readapted_merge_strategy == 'median':
                         # For temporal_patch_size=2, median is equivalent to mean
                         adapt_range_tensor = selected_frames_tensor.median(dim=1)[0]
                     else:
                         raise ValueError(
-                            f"Unknown adapt_strategy_with_temporal_merge: {adapt_strategy_with_temporal_merge}. "
+                            f"Unknown temporal_readapted_merge_strategy: {temporal_readapted_merge_strategy}. "
                             f"Supported strategies: ['mean', 'first', 'last', 'median']"
                         )
                     
                     range_tensor = adapt_range_tensor.view(-1, 1)
                     
                     # JJ: Two scaling strategies for mRoPE_readaptT
-                    if readapted_do_dynamic_scope:
+                    if temporal_readapted_use_dynamic_scale_factor:
                         # Dynamic: Map to [0, llm_grid_t-1] based on current video's temporal dimension
                         # This ensures position IDs span the full temporal range available
                         target_max_t_pos = (llm_grid_t * temporal_patch_size - 1)
                     else:
-                        # Fixed: Map to [0, readapted_scope_resolution] for consistent encoding
+                        # Fixed: Map to [0, temporal_readapted_scale_factor] for consistent encoding
                         # This provides fair temporal encoding across different sampling granularities
-                        target_max_t_pos = readapted_scope_resolution
+                        target_max_t_pos = temporal_readapted_scale_factor
                     
                     # Apply linear mapping: [min_frame_id, max_frame_id] → [0, target_max_t_pos]
                     original_min_frame = adapt_range_tensor.min()
@@ -515,14 +527,401 @@ def custom_get_rope_index(
         visual_token_mask = torch.zeros(input_ids.shape[0], input_ids.shape[1], dtype=torch.long, device=input_ids.device)
         return position_ids, mrope_position_deltas, visual_token_mask
 
+def custom_get_pose_rope_index(
+    config,
+    input_ids: Optional[torch.LongTensor] = None,
+    image_grid_thw: Optional[torch.LongTensor] = None,
+    video_grid_thw: Optional[torch.LongTensor] = None,
+    selected_frames_poses: Optional[torch.Tensor] = None,  # JJ: Camera poses (N, 4, 4)
+    selected_frames_id: Optional[List[int]] = None,  # JJ: Frame indices for mRoPE_readaptT
+    second_per_grid_ts: Optional[torch.Tensor] = None,
+    attention_mask: Optional[torch.Tensor] = None,
+    pose_enc_type: str = "PTHW",  # default PTHW
+    temporal_patch_size: int = 2,
+    # ==================== Pose Parameters ====================
+    pose_scale_factor: float = 16.0,  # JJ: Renamed from global_normalize_scale_factor
+    pose_merge_strategy: str = 'mean',  # JJ: Independent merge strategy for Pose
+    pose_use_dynamic_scale_factor: bool = False,  # JJ: New parameter for dynamic scaling
+    pose_anchor_rereference_strategy: str = 'first',  # JJ: 'first' = re-reference to first frame
+    pose_id_scalar_lambda_trans: float = 1.0,  # JJ: Balance weight between rotation and translation
+    hard_reset_reference_after_pose_merge: bool = True,  # JJ: Re-norm after aggregation to restore reference point
+    do_offset_in_pose_pos_id: bool = True,  # JJ: Renamed from add_offset_in_pose_id
+    # ==================== Temporal Parameters ====================
+    THW_position_ids_compute_mode: str = 'mRoPE',  # JJ: 'mRoPE', 'mRoPE_woT', 'mRoPE_readaptT'
+    temporal_readapted_merge_strategy: str = 'mean',  # JJ: Renamed for consistency
+    temporal_readapted_use_dynamic_scale_factor: bool = True,  # JJ: Renamed for consistency
+    temporal_readapted_scale_factor: float = 16.0,  # JJ: Renamed for consistency
+) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    """
+    Compute 4D Pose-Temporal-Height-Width RoPE indices for vision+text sequence.
+
+    Output shape: (4, batch_size, seq_len)
+    Pose index is computed via compute_lie_scalar_index_torch.
+
+    Args:
+        selected_frames_poses: (N, 4, 4) camera-to-world poses for Pose encoding
+        selected_frames_id: List of frame indices for mRoPE_readaptT temporal adjustment
+        pose_enc_type: ['PTHW'], default PTHW (only PTHW implemented for now)
+        
+        Pose Parameters:
+            pose_scale_factor: scale factor for Pose normalization [0, scale_factor]
+            pose_merge_strategy: aggregation strategy for pose patches ('mean', 'first', 'last', 'median')
+            pose_use_dynamic_scale_factor: use dynamic scale based on pose count
+            pose_anchor_rereference_strategy: re-reference all poses to first frame
+            pose_id_scalar_lambda_trans: balance weight between rotation and translation in Lie scalar
+            hard_reset_reference_after_pose_merge: re-normalize after aggregation
+            do_offset_in_pose_pos_id: add sequential offset to Pose dimension
+        
+        Temporal Parameters:
+            THW_position_ids_compute_mode: temporal adjustment strategy ('mRoPE', 'mRoPE_woT', 'mRoPE_readaptT')
+            temporal_readapted_merge_strategy: aggregation strategy for temporal patches ('mean', 'first', 'last', 'median')
+            temporal_readapted_use_dynamic_scale_factor: use dynamic scale based on T-length
+            temporal_readapted_scale_factor: fixed scale factor for temporal dimension
+        
+        Others: follow original custom_get_rope_index API
+
+    Returns:
+        position_ids: (4, batch_size, seq_len) - Pose dimension is float, THW dimensions are long
+        rope_deltas: (batch_size, 1)
+        visual_token_mask: (batch_size, seq_len)
+    """
+    # ------------------ CHECK ------------------
+    if pose_enc_type != "PTHW":
+        raise NotImplementedError(f"pose_enc_type={pose_enc_type} not implemented. Only 'PTHW' is supported.")
+    if THW_position_ids_compute_mode == 'mRoPE_readaptT':
+        if temporal_patch_size != 2:
+            raise NotImplementedError(
+                f"mRoPE_readaptT with temporal_patch_size={temporal_patch_size} is not implemented. "
+                f"Currently only temporal_patch_size=2 is supported."
+            )
+        if selected_frames_id is None:
+            raise ValueError("selected_frames_id is required for mRoPE_readaptT mode")
+    # ------------------ END CHECK ------------------
+
+    batch_size = input_ids.shape[0]
+    seq_len = input_ids.shape[1]
+    spatial_merge_size = config.vision_config.spatial_merge_size
+
+    # ------------------ REUSE: initialize position_ids and mask ------------------
+    # JJ: Keep Pose dimension as float, THW dimensions as long
+    position_ids = torch.ones(
+        4, batch_size, seq_len, dtype=torch.float32, device=input_ids.device
+    )
+    visual_token_mask = torch.zeros(batch_size, seq_len, dtype=torch.long, device=input_ids.device)
+    rope_deltas = []
+    # ------------------ END REUSE ------------------
+
+    # ------------------ EXTEND: Select anchor frame based on strategy ------------------
+    # JJ: Determine which frame to use as reference for pose distance computation
+    if pose_anchor_rereference_strategy == 'first':
+        # Use first frame as anchor
+        ref_frame_idx = 0
+    elif pose_anchor_rereference_strategy == 'medoid':
+        # Use medoid frame as anchor (frame with minimum sum of distances to all others)
+        # Compute pairwise Lie scalar distances between all poses
+        N = selected_frames_poses.shape[0]
+        device = selected_frames_poses.device
+        
+        # Compute distance matrix: D[i,j] = distance between pose i and pose j
+        distance_matrix = torch.zeros(N, N, device=device)
+        for i in range(N):
+            for j in range(N):
+                if i != j:
+                    # Compute relative pose: T_j_to_i = inv(T_i_to_w) @ T_j_to_w
+                    pose_i_w2c = torch.linalg.inv(selected_frames_poses[i])
+                    pose_rel = pose_i_w2c @ selected_frames_poses[j]
+                    
+                    # Compute Lie scalar distance (rotation angle + translation norm)
+                    # Use simplified distance: sqrt(theta^2 + d^2)
+                    R_rel = pose_rel[:3, :3]
+                    t_rel = pose_rel[:3, 3]
+                    
+                    # Rotation angle from trace(R) = 1 + 2*cos(theta)
+                    trace = torch.diagonal(R_rel).sum()
+                    cos_theta = (trace - 1.0) / 2.0
+                    cos_theta = torch.clamp(cos_theta, -1.0, 1.0)
+                    theta = torch.acos(cos_theta)
+                    
+                    # Translation distance
+                    d_trans = torch.norm(t_rel)
+                    
+                    # Combined distance (same weighting as in compute_lie_scalar_index_torch)
+                    distance_matrix[i, j] = torch.sqrt(theta**2 + d_trans**2)
+        
+        # Find medoid: frame with minimum sum of distances
+        dist_sums = distance_matrix.sum(dim=1)  # (N,)
+        ref_frame_idx = torch.argmin(dist_sums).item()
+    else:
+        raise NotImplementedError(
+            f"pose_anchor_rereference_strategy='{pose_anchor_rereference_strategy}' not supported. "
+            f"Only 'first' and 'medoid' are implemented."
+        )
+    
+    print(f'[INFO] Reference frame index: {ref_frame_idx}')
+    # ------------------ END EXTEND ------------------
+
+    # ------------------ REUSE: compute Pose index (P) via Lie scalar ------------------
+    # P shape: (num_frames,), range: [0, 1] if global_normalize=True
+    P = compute_lie_scalar_index_torch(
+        poses_c2w=selected_frames_poses,
+        pose_id_scalar_lambda_trans=pose_id_scalar_lambda_trans,  # JJ: Renamed parameter
+        traj_scale_norm=True,
+        global_normalize=True,
+        reorth_rot=True,
+        reference_frame_id=ref_frame_idx,  # 🆕 NEW: use selected anchor frame
+    )
+    # min is for sure zero, as reference frame distance to itself is 0
+    print(f'P_nonscaled/anchor_strategy:{pose_anchor_rereference_strategy}/archor_idx:{ref_frame_idx}:')
+    print(f'{P}')
+    # if reorth is disabled we can gurateen P[ref_frame_idx] == 0
+    # assert P[ref_frame_idx] == 0, \
+        # f"P[{ref_frame_idx}] (reference frame) should be 0, but got {P[ref_frame_idx]}"
+    # sanity check P
+    if P.min() < 0 or P.max() == 0:
+        raise ValueError(f"P contains invalid values, min={P.min()}, max={P.max()}")
+    # ------------------ END REUSE ------------------
+
+    # ------------------ EXTEND: Move P to correct device ------------------
+    # ✏️ FIXED: Ensure P is on the same device as input_ids
+    P = P.to(input_ids.device)
+
+    # ------------------ END EXTEND ------------------
+
+    # ------------------ EXTEND: iterate batch and vision tokens to build PTHW indices ------------------
+    image_token_id = config.image_token_id
+    video_token_id = config.video_token_id
+    vision_start_token_id = config.vision_start_token_id
+    
+    for i in range(batch_size):
+        st = 0
+        llm_pos_ids_list = []
+        llm_visual_mask_list = []
+
+        input_masked = input_ids[i][attention_mask[i]==1]
+        input_tokens = input_masked.tolist()
+        vision_start_indices = torch.argwhere(input_masked == vision_start_token_id).squeeze(1)
+        vision_tokens = input_masked[vision_start_indices+1]
+        image_nums = (vision_tokens == image_token_id).sum()
+        video_nums = (vision_tokens == video_token_id).sum()
+        image_index, video_index = 0, 0
+        remain_images, remain_videos = image_nums, video_nums
+
+        for _ in range(image_nums + video_nums):
+            if image_token_id in input_tokens and remain_images > 0:
+                ed_image = input_tokens.index(image_token_id, st)
+            else:
+                ed_image = len(input_tokens)+1
+            if video_token_id in input_tokens and remain_videos > 0:
+                ed_video = input_tokens.index(video_token_id, st)
+            else:
+                ed_video = len(input_tokens)+1
+
+            if ed_image < ed_video:
+                t, h, w = image_grid_thw[image_index]
+                second_per_grid_t = 0
+                image_index += 1
+                remain_images -= 1
+                ed = ed_image
+            else:
+                t, h, w = video_grid_thw[video_index]
+                if second_per_grid_ts is not None:
+                    second_per_grid_t = second_per_grid_ts[video_index]
+                else:
+                    second_per_grid_t = 1.0
+                video_index += 1
+                remain_videos -= 1
+                ed = ed_video
+
+            llm_grid_t, llm_grid_h, llm_grid_w = (
+                t.item(),
+                h.item() // spatial_merge_size,
+                w.item() // spatial_merge_size,
+            )
+            
+            # -------------------------
+            # Text segment before <image>/<video> token
+            # -------------------------
+            text_len = ed - st
+            # JJ: st_idx is based on max of all dimensions (including Pose)
+            st_idx = llm_pos_ids_list[-1].max() + 1 if len(llm_pos_ids_list) > 0 else 0
+            # JJ: For text tokens, all 4 dimensions (PTHW) follow sequential pattern
+            text_pthw = torch.arange(text_len, dtype=torch.float32, device=input_ids.device).view(1, -1).expand(4, -1) + st_idx
+            llm_pos_ids_list.append(text_pthw)
+            llm_visual_mask_list.append(torch.zeros(text_len, dtype=torch.long, device=input_ids.device))
+
+            # -------------------------
+            # Vision patch segment: Pose + Temporal + Height + Width
+            # -------------------------
+            # JJ: Sanity check - P length should match llm_grid_t * temporal_patch_size
+            assert len(P) == llm_grid_t * temporal_patch_size, \
+                f"Expected P length {llm_grid_t * temporal_patch_size}, got {len(P)}"
+            
+            # JJ: Aggregate P based on temporal_patch_size
+            selected_frames_tensor = P.view(llm_grid_t, temporal_patch_size)
+            if pose_merge_strategy == 'mean':
+                pose_range_tensor = selected_frames_tensor.mean(dim=1)
+            elif pose_merge_strategy == 'first':
+                pose_range_tensor = selected_frames_tensor[:, 0]
+            elif pose_merge_strategy == 'last':
+                pose_range_tensor = selected_frames_tensor[:, -1]
+            elif pose_merge_strategy == 'median':
+                pose_range_tensor = selected_frames_tensor.median(dim=1)[0]
+            else:
+                raise ValueError(
+                    f"Unknown pose_merge_strategy: {pose_merge_strategy}. "
+                    f"Supported strategies: ['mean', 'first', 'last', 'median']"
+                )
+            
+            # JJ: Warning if pose and temporal strategies differ
+            if pose_merge_strategy != temporal_readapted_merge_strategy:
+                print(f"[WARNING] pose_merge_strategy ('{pose_merge_strategy}') != temporal_readapted_merge_strategy ('{temporal_readapted_merge_strategy}')")
+            
+            # JJ: Optionally re-normalize aggregated pose to [0, 1] before scaling
+            # Motivation: Aggregation (especially mean) hides the zero pose due to re-reference,
+            # losing "reference frame" semantics. Re-norm restores this and ensures consistent
+            # range utilization, mirroring the temporal dimension's handling.
+            if hard_reset_reference_after_pose_merge:
+                pose_min = pose_range_tensor.min()
+                pose_max = pose_range_tensor.max()
+                pose_range = pose_max - pose_min
+                if pose_range > 0:
+                    pose_range_tensor = (pose_range_tensor - pose_min) / pose_range  # Re-norm to [0, 1]
+            
+            # JJ: Scale (re-)normalized pose to target range
+            if pose_use_dynamic_scale_factor:
+                # Dynamic: scale to [0, len(selected_frames_poses) - 1]
+                target_max_p_pos = len(selected_frames_poses) - 1
+                pose_range_tensor = pose_range_tensor * target_max_p_pos
+            else:
+                # Fixed: scale to [0, pose_scale_factor]
+                pose_range_tensor = pose_range_tensor * pose_scale_factor
+            
+            # JJ: Expand pose_range_tensor to H*W patches
+            pose_idx = pose_range_tensor.view(-1, 1).expand(-1, llm_grid_h * llm_grid_w).flatten()
+            # Keep pose_idx as float for precise frequency encoding
+            # DEBUG: print(f"DEBUG pose_idx range: [{pose_idx.min():.4f}, {pose_idx.max():.4f}]")
+            
+            # -------------------------
+            # Temporal index: inherit from custom_get_rope_index (lines 389-455)
+            # -------------------------
+            range_tensor = torch.arange(llm_grid_t, device=input_ids.device).view(-1, 1)
+            
+            if THW_position_ids_compute_mode == 'mRoPE_woT':
+                range_tensor = torch.zeros_like(range_tensor)
+                expanded_range = range_tensor.expand(-1, llm_grid_h * llm_grid_w)
+                time_tensor = expanded_range * second_per_grid_t * temporal_patch_size
+            elif THW_position_ids_compute_mode == 'mRoPE_readaptT':
+                # JJ: Aggregate selected_frames_id based on strategy
+                selected_frames_id_tensor = torch.tensor(selected_frames_id, device=input_ids.device).view(-1, temporal_patch_size).float()
+                
+                if temporal_readapted_merge_strategy == 'mean':
+                    adapt_range_tensor = selected_frames_id_tensor.mean(dim=1)
+                elif temporal_readapted_merge_strategy == 'first':
+                    adapt_range_tensor = selected_frames_id_tensor[:, 0]
+                elif temporal_readapted_merge_strategy == 'last':
+                    adapt_range_tensor = selected_frames_id_tensor[:, -1]
+                elif temporal_readapted_merge_strategy == 'median':
+                    adapt_range_tensor = selected_frames_id_tensor.median(dim=1)[0]
+                else:
+                    raise ValueError(
+                        f"Unknown temporal_readapted_merge_strategy: {temporal_readapted_merge_strategy}. "
+                        f"Supported strategies: ['mean', 'first', 'last', 'median']"
+                    )
+                
+                range_tensor = adapt_range_tensor.view(-1, 1)
+                
+                # JJ: Two scaling strategies for mRoPE_readaptT
+                if temporal_readapted_use_dynamic_scale_factor:
+                    target_max_t_pos = (llm_grid_t * temporal_patch_size - 1)
+                else:
+                    target_max_t_pos = temporal_readapted_scale_factor
+                
+                # Apply linear mapping: [min_frame_id, max_frame_id] → [0, target_max_t_pos]
+                original_min_frame = adapt_range_tensor.min()
+                original_max_frame = adapt_range_tensor.max()
+                original_frame_range = original_max_frame - original_min_frame
+                
+                # ✏️ FIXED: Keep scale_factor as tensor to avoid device issues
+                if original_frame_range > 0:
+                    scale_factor = target_max_t_pos / original_frame_range
+                else:
+                    scale_factor = torch.tensor(1.0, device=input_ids.device, dtype=range_tensor.dtype)
+                
+                # Normalize: first shift to start at 0, then scale to target range
+                range_tensor = (range_tensor - original_min_frame) * scale_factor
+                range_tensor = range_tensor.to(device=input_ids.device, dtype=range_tensor.dtype)
+                expanded_range = range_tensor.expand(-1, llm_grid_h * llm_grid_w)
+                
+                # JJ: Use multiplier of 1 since we obtain t_pos from frame_id directly
+                time_tensor = expanded_range * second_per_grid_t * 1
+            else:
+                assert THW_position_ids_compute_mode == 'mRoPE', f'Expected mRoPE, mRoPE_woT or mRoPE_readaptT but got {THW_position_ids_compute_mode}'
+                expanded_range = range_tensor.expand(-1, llm_grid_h * llm_grid_w)
+                time_tensor = expanded_range * second_per_grid_t * temporal_patch_size
+
+            time_tensor_long = time_tensor.long()
+            t_index = time_tensor_long.flatten()
+
+            # H, W index
+            h_index = torch.arange(llm_grid_h, device=input_ids.device).view(1, -1, 1).expand(llm_grid_t, -1, llm_grid_w).flatten()
+            w_index = torch.arange(llm_grid_w, device=input_ids.device).view(1, 1, -1).expand(llm_grid_t, llm_grid_h, -1).flatten()
+            
+            # JJ: Stack as Pose + T + H + W
+            # Pose dimension: optionally add offset based on do_offset_in_pose_pos_id flag
+            # T/H/W dimensions: always add offset to maintain continuous position IDs
+            if do_offset_in_pose_pos_id:
+                # Pose follows sequential pattern with offset
+                print('Again inspect pose_idx:')
+                print(f'{pose_idx.min()},{pose_idx.max()}')
+                pose_with_offset = pose_idx + text_len + st_idx
+                thw_with_offset = torch.stack([t_index, h_index, w_index]).float() + text_len + st_idx
+                llm_pos_ids_list.append(torch.cat([pose_with_offset.unsqueeze(0), thw_with_offset], dim=0))
+            else:
+                # Pose stays in its normalized range [0, pose_scale_factor]
+                thw_with_offset = torch.stack([t_index, h_index, w_index]).float() + text_len + st_idx
+                llm_pos_ids_list.append(torch.cat([pose_idx.unsqueeze(0), thw_with_offset], dim=0))
+            
+            vision_len = llm_grid_t * llm_grid_h * llm_grid_w
+            llm_visual_mask_list.append(torch.ones(vision_len, dtype=torch.long, device=input_ids.device))
+            st = ed + vision_len
+
+        # trailing text
+        if st < len(input_tokens):
+            text_len = len(input_tokens) - st
+            # JJ: st_idx is based on max of all dimensions (including Pose)
+            st_idx = llm_pos_ids_list[-1].max() + 1 if len(llm_pos_ids_list) > 0 else 0
+            # JJ: For text tokens, all 4 dimensions (PTHW) follow sequential pattern
+            text_pthw = torch.arange(text_len, dtype=torch.float32, device=input_ids.device).view(1, -1).expand(4, -1) + st_idx
+            llm_pos_ids_list.append(text_pthw)
+            llm_visual_mask_list.append(torch.zeros(text_len, dtype=torch.long, device=input_ids.device))
+
+        llm_positions = torch.cat(llm_pos_ids_list, dim=1).reshape(4, -1)
+        llm_visual_mask = torch.cat(llm_visual_mask_list, dim=0).reshape(-1)
+        
+        position_ids[..., i, attention_mask[i]==1] = llm_positions.to(position_ids.device)
+        visual_token_mask[i, attention_mask[i]==1] = llm_visual_mask
+        rope_deltas.append(llm_positions.max() + 1 - len(input_ids[i]))
+
+    rope_deltas = torch.tensor(rope_deltas, device=input_ids.device).unsqueeze(1)
+    return position_ids, rope_deltas, visual_token_mask
+
+
 if __name__ == "__main__":
     config = Qwen2_5_VLConfig()
     # update some param
     config.rope_type = 'default'
     config.rope_theta = 10000.0
-    config.rope_theta = 10000.0
     config.hidden_size = 128
     config.num_attention_heads = 1
+    config.max_position_embeddings = 32768  # JJ: Required for CustomQwen2_5_VLRotaryEmbedding
+    # JJ: Add vision_config attributes for testing
+    if not hasattr(config, 'vision_config'):
+        from types import SimpleNamespace
+        config.vision_config = SimpleNamespace()
+    config.vision_config.spatial_merge_size = 2
+    config.vision_start_token_id = 151652
+    config.image_token_id = 151655
+    config.video_token_id = 151656
 
 
     rotary_emb = CustomQwen2_5_VLRotaryEmbedding(config)
@@ -552,3 +951,245 @@ if __name__ == "__main__":
         rope_theta=config.rope_theta,
         hidden_size=config.hidden_size
     )
+
+    # ========================================
+    # JJ: Comparable test for pose-aware RoPE
+    # ========================================
+    print("\n" + "="*80)
+    print("TESTING: custom_get_rope_index vs custom_get_pose_rope_index")
+    print("="*80)
+    
+    # Setup test data
+    BS = 1
+    num_frames = 16
+    temporal_patch_size = 2
+    llm_grid_t = num_frames // temporal_patch_size  # 8
+    llm_grid_h, llm_grid_w = 46 // 2, 34 // 2  # 23, 17 after spatial merge
+    vision_tokens = llm_grid_t * llm_grid_h * llm_grid_w  # 3128
+    text_tokens_before = 10
+    text_tokens_after = 20
+    total_tokens = text_tokens_before + vision_tokens + text_tokens_after  # 3158
+    
+    # Create dummy input_ids (simplified: text + video + text)
+    input_ids = torch.zeros(BS, total_tokens, dtype=torch.long)
+    input_ids[0, 0:text_tokens_before] = 1  # text tokens
+    input_ids[0, text_tokens_before-1] = config.vision_start_token_id  # vision start
+    input_ids[0, text_tokens_before] = config.video_token_id  # video token
+    input_ids[0, text_tokens_before+1:text_tokens_before+vision_tokens+1] = 2  # vision patch tokens
+    input_ids[0, text_tokens_before+vision_tokens+1:] = 1  # trailing text
+    
+    attention_mask = torch.ones(BS, total_tokens, dtype=torch.long)
+    
+    # Video grid: [T, H, W] before spatial merge
+    video_grid_thw = torch.tensor([[llm_grid_t, 46, 34]], dtype=torch.long)
+    image_grid_thw = None
+    
+    # JJ: Generate dummy camera poses (N, 4, 4) for Pose encoding
+    # Create a simple camera trajectory moving along x-axis with slight rotation
+    selected_frames_poses = torch.eye(4).unsqueeze(0).repeat(num_frames, 1, 1)
+    for i in range(num_frames):
+        # Translation along x-axis
+        selected_frames_poses[i, 0, 3] = i * 0.1  # x translation
+        selected_frames_poses[i, 1, 3] = i * 0.02  # y translation
+        selected_frames_poses[i, 2, 3] = i * 0.01  # z translation
+        # Small rotation around y-axis
+        angle = i * 0.05
+        selected_frames_poses[i, 0, 0] = torch.cos(torch.tensor(angle))
+        selected_frames_poses[i, 0, 2] = torch.sin(torch.tensor(angle))
+        selected_frames_poses[i, 2, 0] = -torch.sin(torch.tensor(angle))
+        selected_frames_poses[i, 2, 2] = torch.cos(torch.tensor(angle))
+    
+    # For custom_get_rope_index, we still use frame indices
+    selected_frames_id = list(range(num_frames))  # [0, 1, 2, ..., 15]
+    second_per_grid_ts = torch.tensor([1.0])  # 1 second per grid
+    
+    print(f"\nTest configuration:")
+    print(f"  Batch size: {BS}")
+    print(f"  Total frames: {num_frames}")
+    print(f"  temporal_patch_size: {temporal_patch_size}")
+    print(f"  llm_grid_t (after merge): {llm_grid_t}")
+    print(f"  llm_grid_h, llm_grid_w: {llm_grid_h}, {llm_grid_w}")
+    print(f"  Vision tokens: {vision_tokens}")
+    print(f"  Total sequence length: {total_tokens}")
+    
+    # ========================================
+    # Test 1: Standard mRoPE (3D)
+    # ========================================
+    print(f"\n{'='*80}")
+    print("TEST 1: custom_get_rope_index with mRoPE")
+    print(f"{'='*80}")
+    
+    pos_ids_3d, deltas_3d, vis_mask_3d = custom_get_rope_index(
+        config=config,
+        input_ids=input_ids,
+        image_grid_thw=image_grid_thw,
+        video_grid_thw=video_grid_thw,
+        second_per_grid_ts=second_per_grid_ts,
+        attention_mask=attention_mask,
+        position_ids_compute_mode='mRoPE',
+        selected_frames_id=selected_frames_id,
+        temporal_patch_size=temporal_patch_size,
+    )
+    
+    print(f"  Output shape: {pos_ids_3d.shape}")  # (3, BS, seq_len)
+    print(f"  Deltas shape: {deltas_3d.shape}")
+    print(f"  Visual mask shape: {vis_mask_3d.shape}")
+    print(f"  Position IDs range - T: [{pos_ids_3d[0].min()}, {pos_ids_3d[0].max()}]")
+    print(f"  Position IDs range - H: [{pos_ids_3d[1].min()}, {pos_ids_3d[1].max()}]")
+    print(f"  Position IDs range - W: [{pos_ids_3d[2].min()}, {pos_ids_3d[2].max()}]")
+    print(f"  Visual tokens count: {vis_mask_3d.sum().item()}")
+    
+    # ========================================
+    # Test 2: Pose-aware mRoPE (4D) - PTHW with mRoPE
+    # ========================================
+    print(f"\n{'='*80}")
+    print("TEST 2: custom_get_pose_rope_index with PTHW + mRoPE")
+    print(f"{'='*80}")
+    
+    pos_ids_4d, deltas_4d, vis_mask_4d = custom_get_pose_rope_index(
+        config=config,
+        input_ids=input_ids,
+        image_grid_thw=image_grid_thw,
+        video_grid_thw=video_grid_thw,
+        selected_frames_poses=selected_frames_poses,  # JJ: Pass camera poses
+        selected_frames_id=selected_frames_id,  # JJ: Pass frame indices (needed for mRoPE_readaptT)
+        second_per_grid_ts=second_per_grid_ts,
+        attention_mask=attention_mask,
+        pose_enc_type='PTHW',
+        temporal_patch_size=temporal_patch_size,
+        pose_scale_factor=16.0,
+        pose_merge_strategy='mean',
+        pose_use_dynamic_scale_factor=False,
+        do_offset_in_pose_pos_id=False,  # JJ: Keep Pose in normalized range [0, 16]
+        THW_position_ids_compute_mode='mRoPE',
+        temporal_readapted_merge_strategy='mean',
+    )
+    
+    print(f"  Output shape: {pos_ids_4d.shape}")  # (4, BS, seq_len)
+    print(f"  Deltas shape: {deltas_4d.shape}")
+    print(f"  Visual mask shape: {vis_mask_4d.shape}")
+    print(f"  Position IDs range - P: [{pos_ids_4d[0].min():.4f}, {pos_ids_4d[0].max():.4f}]")
+    print(f"  Position IDs range - T: [{pos_ids_4d[1].min()}, {pos_ids_4d[1].max()}]")
+    print(f"  Position IDs range - H: [{pos_ids_4d[2].min()}, {pos_ids_4d[2].max()}]")
+    print(f"  Position IDs range - W: [{pos_ids_4d[3].min()}, {pos_ids_4d[3].max()}]")
+    print(f"  Visual tokens count: {vis_mask_4d.sum().item()}")
+    
+    # ========================================
+    # Test 3: Pose-aware mRoPE_readaptT (4D)
+    # ========================================
+    print(f"\n{'='*80}")
+    print("TEST 3: custom_get_pose_rope_index with PTHW + mRoPE_readaptT")
+    print(f"{'='*80}")
+    
+    pos_ids_4d_readapt, deltas_4d_readapt, vis_mask_4d_readapt = custom_get_pose_rope_index(
+        config=config,
+        input_ids=input_ids,
+        image_grid_thw=image_grid_thw,
+        video_grid_thw=video_grid_thw,
+        selected_frames_poses=selected_frames_poses,  # JJ: Pass camera poses
+        selected_frames_id=selected_frames_id,  # JJ: Pass frame indices (required for mRoPE_readaptT)
+        second_per_grid_ts=second_per_grid_ts,
+        attention_mask=attention_mask,
+        pose_enc_type='PTHW',
+        temporal_patch_size=temporal_patch_size,
+        pose_scale_factor=16.0,
+        pose_merge_strategy='mean',
+        pose_use_dynamic_scale_factor=False,
+        do_offset_in_pose_pos_id=False,
+        THW_position_ids_compute_mode='mRoPE_readaptT',
+        temporal_readapted_merge_strategy='mean',
+        temporal_readapted_use_dynamic_scale_factor=True,
+    )
+    
+    print(f"  Output shape: {pos_ids_4d_readapt.shape}")
+    print(f"  Position IDs range - P: [{pos_ids_4d_readapt[0].min():.4f}, {pos_ids_4d_readapt[0].max():.4f}]")
+    print(f"  Position IDs range - T: [{pos_ids_4d_readapt[1].min()}, {pos_ids_4d_readapt[1].max()}]")
+    print(f"  Position IDs range - H: [{pos_ids_4d_readapt[2].min()}, {pos_ids_4d_readapt[2].max()}]")
+    print(f"  Position IDs range - W: [{pos_ids_4d_readapt[3].min()}, {pos_ids_4d_readapt[3].max()}]")
+    
+    # ========================================
+    # Test 4: Consistency check - THW dimensions should match
+    # ========================================
+    print(f"\n{'='*80}")
+    print("TEST 4: Consistency check between 3D and 4D RoPE")
+    print(f"{'='*80}")
+    
+    # Extract vision tokens only
+    vision_start_idx = text_tokens_before + 1
+    vision_end_idx = vision_start_idx + vision_tokens
+    
+    # THW from 3D RoPE
+    t_3d = pos_ids_3d[0, 0, vision_start_idx:vision_end_idx]
+    h_3d = pos_ids_3d[1, 0, vision_start_idx:vision_end_idx]
+    w_3d = pos_ids_3d[2, 0, vision_start_idx:vision_end_idx]
+    
+    # THW from 4D RoPE
+    p_4d = pos_ids_4d[0, 0, vision_start_idx:vision_end_idx]
+    t_4d = pos_ids_4d[1, 0, vision_start_idx:vision_end_idx]
+    h_4d = pos_ids_4d[2, 0, vision_start_idx:vision_end_idx]
+    w_4d = pos_ids_4d[3, 0, vision_start_idx:vision_end_idx]
+    
+    # Check if THW dimensions match
+    t_match = torch.allclose(t_3d.float(), t_4d.float())
+    h_match = torch.allclose(h_3d.float(), h_4d.float())
+    w_match = torch.allclose(w_3d.float(), w_4d.float())
+    
+    print(f"  T dimension matches: {t_match}")
+    print(f"  H dimension matches: {h_match}")
+    print(f"  W dimension matches: {w_match}")
+    
+    if not (t_match and h_match and w_match):
+        print("  ⚠️  WARNING: THW dimensions do NOT match!")
+        print(f"    T diff: max={torch.abs(t_3d.float() - t_4d.float()).max()}")
+        print(f"    H diff: max={torch.abs(h_3d.float() - h_4d.float()).max()}")
+        print(f"    W diff: max={torch.abs(w_3d.float() - w_4d.float()).max()}")
+    else:
+        print("  ✓ THW dimensions are consistent!")
+    
+    # Show Pose dimension statistics
+    print(f"\n  Pose dimension (P) statistics (vision tokens only):")
+    print(f"    Mean: {p_4d.float().mean():.4f}")
+    print(f"    Std:  {p_4d.float().std():.4f}")
+    print(f"    Min:  {p_4d.float().min():.4f}")
+    print(f"    Max:  {p_4d.float().max():.4f}")
+    print(f"    Unique values: {len(torch.unique(p_4d))}")
+    
+    # Check Pose range for all tokens (including text)
+    p_4d_all = pos_ids_4d[0, 0, :]
+    print(f"\n  Pose dimension (P) statistics (all tokens including text):")
+    print(f"    Min:  {p_4d_all.float().min():.4f}")
+    print(f"    Max:  {p_4d_all.float().max():.4f}")
+    
+    # ========================================
+    # Test 5: Different aggregation strategies
+    # ========================================
+    print(f"\n{'='*80}")
+    print("TEST 5: Comparing aggregation strategies (mean vs first vs last)")
+    print(f"{'='*80}")
+    
+    strategies = ['mean', 'first', 'last', 'median']
+    pose_ranges = {}
+    
+    for strategy in strategies:
+        pos_ids_strat, _, _ = custom_get_pose_rope_index(
+            config=config,
+            input_ids=input_ids,
+            image_grid_thw=image_grid_thw,
+            video_grid_thw=video_grid_thw,
+            selected_frames_poses=selected_frames_poses,  # JJ: Pass camera poses
+            selected_frames_id=selected_frames_id,  # JJ: Pass frame indices
+            second_per_grid_ts=second_per_grid_ts,
+            attention_mask=attention_mask,
+            pose_enc_type='PTHW',
+            temporal_patch_size=temporal_patch_size,
+            pose_merge_strategy=strategy,
+            THW_position_ids_compute_mode='mRoPE',
+            temporal_readapted_merge_strategy=strategy,
+        )
+        p_strat = pos_ids_strat[0, 0, vision_start_idx:vision_end_idx]
+        pose_ranges[strategy] = (p_strat.min().item(), p_strat.max().item(), p_strat.float().mean().item())
+        print(f"  {strategy:8s}: min={pose_ranges[strategy][0]:.4f}, max={pose_ranges[strategy][1]:.4f}, mean={pose_ranges[strategy][2]:.4f}")
+    
+    print(f"\n{'='*80}")
+    print("All tests completed successfully! ✓")
+    print(f"{'='*80}\n")

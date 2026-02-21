@@ -1318,17 +1318,17 @@ if __name__ == '__main__':
         poses_array = np.array(poses_numpy)
         poses_tensor = torch.from_numpy(poses_array).float()
         
-        # Test with different lambda_trans values
-        for lambda_trans in [0.1, 0.5, 1.0, 2.0, 5.0]:
+        # Test with different pose_id_scalar_lambda_trans values
+        for pose_id_scalar_lambda_trans in [0.1, 0.5, 1.0, 2.0, 5.0]:
             P = compute_lie_scalar_index_torch(
                 poses_c2w=poses_tensor,
-                lambda_trans=lambda_trans,
+                pose_id_scalar_lambda_trans=pose_id_scalar_lambda_trans,
                 traj_scale_norm=True,
                 global_normalize=True,
                 reorth_rot=True
             )
             
-            print(f"\nlambda_trans = {lambda_trans}:")
+            print(f"\npose_id_scalar_lambda_trans = {pose_id_scalar_lambda_trans}:")
             print(f"  P shape: {P.shape}")
             print(f"  P range: [{P.min().item():.4f}, {P.max().item():.4f}]")
             print(f"  P mean: {P.mean().item():.4f}, std: {P.std().item():.4f}")
@@ -1441,15 +1441,15 @@ if __name__ == '__main__':
             traj_array = np.array(traj_poses)
             traj_tensor = torch.from_numpy(traj_array).float()
             
-            for lambda_trans in [0.1, 0.5, 1.0, 2.0, 5.0]:
+            for pose_id_scalar_lambda_trans in [0.1, 0.5, 1.0, 2.0, 5.0]:
                 P = compute_lie_scalar_index_torch(
                     poses_c2w=traj_tensor,
-                    lambda_trans=lambda_trans,
+                    pose_id_scalar_lambda_trans=pose_id_scalar_lambda_trans,
                     traj_scale_norm=True,
                     global_normalize=True,
                     reorth_rot=True
                 )
-                print(f"\n  lambda_trans = {lambda_trans}:")
+                print(f"\n  pose_id_scalar_lambda_trans = {pose_id_scalar_lambda_trans}:")
                 print(f"    P range: [{P.min().item():.4f}, {P.max().item():.4f}]")
                 print(f"    P mean: {P.mean().item():.4f}, std: {P.std().item():.4f}")
                 print(f"    First 10: {[f'{v:.4f}' for v in P[:].tolist()]}")

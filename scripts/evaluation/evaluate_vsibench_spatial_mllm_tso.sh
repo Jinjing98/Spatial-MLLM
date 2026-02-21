@@ -56,11 +56,11 @@ MODEL_TYPE="spatial-mllm"
 # JJ: Fixed default values (not overridable by env vars)
 # MODEL_TYPE="qwen2.5-vl"
 # MODEL_PATH="Qwen/Qwen2.5-VL-3B-Instruct"
-MODEL_TYPE="qwen3-vl"
-MODEL_PATH="Qwen/Qwen3-VL-2B-Instruct"
+# MODEL_TYPE="qwen3-vl"
+# MODEL_PATH="Qwen/Qwen3-VL-2B-Instruct"
 # MODEL_TYPE="spatial-mllm"
-# MODEL_TYPE="custom-spatial-mllm"
-# MODEL_PATH="Diankun/Spatial-MLLM-v1.1-Instruct-135K"
+MODEL_TYPE="custom-spatial-mllm"
+MODEL_PATH="Diankun/Spatial-MLLM-v1.1-Instruct-135K"
 
 MODEL_NAME=$(echo "$MODEL_PATH" | cut -d'/' -f2)
 
@@ -143,6 +143,7 @@ for nframe in "${nframes[@]}"; do
         --batch_size 1 \
         --output_dir "$EXP_DIR" \
         --output_name "eval_result" \
+        --skip_metric \
         ${SCENE_NAME_LIST[@]:+--scene_names ${SCENE_NAME_LIST[@]}} \
         $EXTRA_ARGS \
         2>&1 | tee -a "$LOG_FILE"

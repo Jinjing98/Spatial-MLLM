@@ -431,17 +431,22 @@ def main():
             selected_poses = poses[selected]
             selected_poses_tensor = torch.from_numpy(selected_poses).float()
             
-            # Test with different lambda_trans values
-            for lambda_trans in [0.1, 0.5, 1.0, 2.0, 5.0]:
+            # JJ FIXME & TODO
+            # rereference_poses: shift the reference from world to 1st frame?
+            # not necessary for vis script but matters if later we want to get the PTHW pose pos index and scale\
+            #  it(if we did not reference to a certain frame in the poses, the min pose id will not be zero).
+
+            # Test with different pose_id_scalar_lambda_trans values
+            for pose_id_scalar_lambda_trans in [0.1, 0.5, 1.0, 2.0, 5.0]:
                 P = compute_lie_scalar_index_torch(
                     poses_c2w=selected_poses_tensor,
-                    lambda_trans=lambda_trans,
+                    pose_id_scalar_lambda_trans=pose_id_scalar_lambda_trans,
                     traj_scale_norm=True,
                     global_normalize=False,
                     reorth_rot=True
                 )
                 
-                print(f"\n    lambda_trans = {lambda_trans}:")
+                print(f"\n    pose_id_scalar_lambda_trans = {pose_id_scalar_lambda_trans}:")
                 print(f"      P shape: {P.shape}")
                 print(f"      P range: [{P.min().item():.4f}, {P.max().item():.4f}]")
                 print(f"      P mean: {P.mean().item():.4f}, std: {P.std().item():.4f}")

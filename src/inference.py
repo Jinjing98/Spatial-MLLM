@@ -57,13 +57,35 @@ def main(
     raw_fps: float | None = None,  # JJ: Original FPS (only for pre-sampled image folders with qwen3-vl)
     use_visual: bool | None = None,  # JJ: Use visual embeddings (None for model default)
     use_geo: bool | None = None,  # JJ: Use geo embeddings (None for model default)
+    # 🆕 NEW: 4D Pose RoPE control flag
+    use_pose_rope: bool = False,  # JJ: Enable 4D Pose-aware RoPE (P+T+H+W) instead of 3D mRoPE (T+H+W)
+    pose_enc_type: str = "PTHW",  # JJ: Pose encoding type (only 'PTHW' supported now)
+    # NOTE: All Pose/Temporal parameters are defined in model.__init__ (custom_spatial_mllm.py)
 ):
     print(f"[Inference] model_type={model_type}, mp4_nframes={mp4_nframes}, sample_fps={sample_fps}")
+    # 🆕 NEW: Print 4D Pose RoPE status
+    if use_pose_rope:
+        print(f"[Inference] 🆕 4D Pose RoPE ENABLED: pose_enc_type={pose_enc_type}")
+        print(f"[Inference] 📌 All Pose/Temporal parameters are defined in model.__init__ (see custom_spatial_mllm.py)")
     torch.cuda.empty_cache()
 
     # load the model
     # JJ: load model and processor with customized use_visual/use_geo
     model, processor = load_model_and_processor(model_type, model_path, use_visual=use_visual, use_geo=use_geo)
+
+    # 🆕 NEW: Apply Pose RoPE monkey patch for custom-spatial-mllm
+    if model_type == "custom-spatial-mllm" and use_pose_rope:
+        from src.custom_qwenvl.model.custom_spatial_mllm_pose_rope import patch_model_with_pose_rope
+        model = patch_model_with_pose_rope(
+            model, 
+            use_pose_rope=True,
+            pose_enc_type=pose_enc_type,
+            # Note: All Temporal & Pose parameters are inherited from model.__init__
+        )
+        print(f"[Inference] ✅ Monkey patch applied: Model now uses 4D Pose-aware RoPE (P+T+H+W)")
+    elif model_type == "custom-spatial-mllm" and not use_pose_rope:
+        print(f"[Inference] ℹ️  Using standard 3D mRoPE (T+H+W)")
+
 
     # JJ: Handle both video file and image folder - use appropriate message constructor
     if model_type == "qwen3-vl":
