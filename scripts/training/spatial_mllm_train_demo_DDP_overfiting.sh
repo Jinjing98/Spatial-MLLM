@@ -17,12 +17,19 @@ DATASET_ROOT="/mnt/nct-zfs/TCO-All/SharedDatasets/SQA3D"  # Dataset root directo
 # DATASETS="sqa3d_filtered_40k" # default "sqa3d_filtered_40k,sqa3d_filtered_40k_small"
 DATASETS="sqa3d_filtered_40k_small" # default "sqa3d_filtered_40k,sqa3d_filtered_40k_small"
 
+DATASET_ROOT="/mnt/cluster/workspaces/jinjingxu/proj/vlm/SpatialMllmHallucinate/third_party/Spatial-MLLM/datasets/ViCA-322K"  # Dataset root directory
+DATASETS="vica_322k_arkitscenes/base/obj_appearance_order_small" # default "sqa3d_filtered_40k,sqa3d_filtered_40k_small"
+# Use 50% of ViCA data
+DATASETS="vica_322k_all%50"
+DATASETS="vica_322k_base%50"
+DATASETS="vica_322k_arkitscenes"  # All ARKitScenes data
+
 # DATASET_ROOT="/data/horse/ws/jixu233b-metadata_ws/datasets/vsibench"  # Dataset root directory
 # Export DATASET_ROOT for Python scripts (__init__.py) to use for data loading
 export DATASET_ROOT
 # JJ Freq Edit
 OUTPUT_ROOT="/mnt/nct-zfs/TCO-Test/jinjingxu/exps/train/spatialmllm"
-TRAIN_EPOCHS=1000 # default 1 
+TRAIN_EPOCHS=50 # default 1 
 NUM_WORKERS=0 # default 8, set to 0 to avoid multiprocessing overhead
 NPROC_PER_NODE=1 # default 6 
 GRAD_ACCUM_STEPS=1 # JJ: reduced from 8 to match 4-sample debug dataset (4 samples / 2 GPUs = 2 per GPU)
@@ -32,6 +39,7 @@ VIDEO_MIN_FRAMES=16 # default 16
 VIDEO_FRAME_FPS=4 # default 4
 GRADIENT_CHECKPOINTING=False # default False
 MODEL_TYPE="custom-spatial-mllm" #"custom-spatial-mllm" # spatial-mllm
+MODEL_TYPE="spatial-mllm" #"custom-spatial-mllm" # spatial-mllm
 PRETRAINED_MODEL_NAME_OR_PATH="Qwen/Qwen2.5-VL-3B-Instruct"
 RUN_NAME_APPENDIX="_2x8_tso"
 # JJ: 4D Pose RoPE config (only for custom-spatial-mllm)

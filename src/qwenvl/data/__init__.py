@@ -83,6 +83,102 @@ SQA3D_FILTERED_40K_SMALL = {
     "data_path": DATASET_ROOT,
 }
 
+### JJ: ViCA-322K Dataset Configurations
+
+# Video root for all ViCA datasets
+VICA_VIDEO_ROOT = os.path.join(DATASET_ROOT, "video")
+
+# Define base and complex tasks
+VICA_BASE_TASKS = [
+    "obj_appearance_order",
+    "object_abs_distance", 
+    "object_count",
+    "object_relative_distance",
+    "object_size_estimation",
+    "room_size"
+]
+
+VICA_COMPLEX_TASKS = [
+    "conversation",
+    "furniture",
+    "important_daily_necessities",
+    "spatial_description",
+    "usage",
+    "wheelchair_user"
+]
+
+# ARKitScenes has additional task
+ARKITSCENES_EXTRA_TASKS = ["triangular_positional_relationship"]
+
+# Data sources
+VICA_SOURCES = ["arkitscenes", "scannet", "scannetpp"]
+
+
+def _generate_vica_configs():
+    """Auto-generate all ViCA-322K dataset configurations"""
+    configs = {}
+    
+    for source in VICA_SOURCES:
+        # Base tasks
+        tasks = VICA_BASE_TASKS.copy()
+        if source == "arkitscenes":
+            tasks.extend(ARKITSCENES_EXTRA_TASKS)
+        
+        for task in tasks:
+            # Full dataset
+            key = f"vica_322k_{source}/base/{task}"
+            configs[key] = {
+                "annotation_path": os.path.join(DATASET_ROOT, source, "base", f"{task}.json"),
+                "data_path": DATASET_ROOT,
+                "video_root": VICA_VIDEO_ROOT,
+            }
+            # Small variant (for debugging)
+            small_key = f"vica_322k_{source}/base/{task}_small"
+            configs[small_key] = {
+                "annotation_path": os.path.join(DATASET_ROOT, source, "base", f"{task}_small.json"),
+                "data_path": DATASET_ROOT,
+                "video_root": VICA_VIDEO_ROOT,
+            }
+        
+        # Complex tasks
+        for task in VICA_COMPLEX_TASKS:
+            key = f"vica_322k_{source}/complex/{task}"
+            configs[key] = {
+                "annotation_path": os.path.join(DATASET_ROOT, source, "complex", f"{task}.json"),
+                "data_path": DATASET_ROOT,
+                "video_root": VICA_VIDEO_ROOT,
+            }
+    
+    return configs
+
+
+# Generate all ViCA configs
+_vica_configs = _generate_vica_configs()
+
+# Define dataset groups for easy access
+# JJ: Exclude _small variants from training groups (only for overfitting tests)
+VICA_DATASET_GROUPS = {
+    # All ViCA data (exclude _small for official training)
+    "vica_322k_all": [k for k in _vica_configs.keys() if "_small" not in k],
+    
+    # By source (exclude _small)
+    "vica_322k_arkitscenes": [k for k in _vica_configs.keys() if k.startswith("vica_322k_arkitscenes/") and "_small" not in k],
+    "vica_322k_scannet": [k for k in _vica_configs.keys() if k.startswith("vica_322k_scannet/") and "_small" not in k],
+    "vica_322k_scannetpp": [k for k in _vica_configs.keys() if k.startswith("vica_322k_scannetpp/") and "_small" not in k],
+    
+    # By task type (exclude _small)
+    "vica_322k_base": [k for k in _vica_configs.keys() if "/base/" in k and "_small" not in k],
+    "vica_322k_complex": [k for k in _vica_configs.keys() if "/complex/" in k],  # complex tasks don't have _small
+    
+    # Combinations (exclude _small)
+    "vica_322k_arkitscenes_base": [k for k in _vica_configs.keys() if k.startswith("vica_322k_arkitscenes/base/") and "_small" not in k],
+    "vica_322k_arkitscenes_complex": [k for k in _vica_configs.keys() if k.startswith("vica_322k_arkitscenes/complex/")],
+    "vica_322k_scannet_base": [k for k in _vica_configs.keys() if k.startswith("vica_322k_scannet/base/") and "_small" not in k],
+    "vica_322k_scannet_complex": [k for k in _vica_configs.keys() if k.startswith("vica_322k_scannet/complex/")],
+    "vica_322k_scannetpp_base": [k for k in _vica_configs.keys() if k.startswith("vica_322k_scannetpp/base/") and "_small" not in k],
+    "vica_322k_scannetpp_complex": [k for k in _vica_configs.keys() if k.startswith("vica_322k_scannetpp/complex/")],
+}
+
 data_dict = {
     "spatial_mllm_mix_10_dbg": SPATIAL_MLLM_MIX_10_DBG,
     "spatial_mllm_mix_133k": SPATIAL_MLLM_MIX_133K,
@@ -93,6 +189,8 @@ data_dict = {
     "mindcube_21k": MINDCUBE_21K,
     "sqa3d_filtered_40k": SQA3D_FILTERED_40K,
     "sqa3d_filtered_40k_small": SQA3D_FILTERED_40K_SMALL,
+    # JJ: Add all ViCA configs
+    **_vica_configs,
 }
 
 
@@ -104,11 +202,29 @@ def parse_sampling_rate(dataset_name):
 
 
 def data_list(dataset_names):
+    """
+    Parse dataset names and return config list.
+    Supports:
+    - Individual datasets: "sqa3d_filtered_40k"
+    - Dataset groups: "vica_322k_all"
+    - Sampling rates: "vica_322k_all%50"
+    - Multiple datasets: ["ds1", "ds2%30", "group1"]
+    """
     config_list = []
     for dataset_name in dataset_names:
         sampling_rate = parse_sampling_rate(dataset_name)
         dataset_name = re.sub(r"%(\d+)$", "", dataset_name)
-        if dataset_name in data_dict.keys():
+        
+        # JJ: Check if it's a ViCA dataset group
+        if dataset_name in VICA_DATASET_GROUPS:
+            # Expand group to individual datasets
+            expanded_datasets = VICA_DATASET_GROUPS[dataset_name]
+            for ds in expanded_datasets:
+                if ds in data_dict:
+                    config = data_dict[ds].copy()
+                    config["sampling_rate"] = sampling_rate
+                    config_list.append(config)
+        elif dataset_name in data_dict.keys():
             config = data_dict[dataset_name].copy()
             config["sampling_rate"] = sampling_rate
             config_list.append(config)

@@ -161,6 +161,21 @@ class LazySupervisedDataset(Dataset):
                 print(f"dataset name: {data}")
             for ann in annotations:
                 ann["data_path"] = data["data_path"]
+                # JJ: Pass optional video_root and image_root for dataset-independent path handling
+                if "video_root" in data:
+                    ann["video_root"] = data["video_root"]
+                if "image_root" in data:
+                    ann["image_root"] = data["image_root"]
+                
+                # JJ: ViCA-322K specific fix - remap <image> to <video> for video data
+                # ViCA uses <image> tag in conversations but has "video" field
+                if "video" in ann and "conversations" in ann:
+                    for conv in ann["conversations"]:
+                        if "value" in conv and "<image>" in conv["value"]:
+                            conv["value"] = conv["value"].replace("<image>", "<video>")
+                        elif "content" in conv and "<image>" in conv["content"]:
+                            conv["content"] = conv["content"].replace("<image>", "<video>")
+            
             list_data_dict += annotations
 
         print(f"Total training samples: {len(list_data_dict)}")
@@ -308,7 +323,8 @@ class LazySupervisedDataset(Dataset):
         assert len(sources) == 1, "Don't know why it is wrapped to a list"  # FIXME
         video = None
         if "image" in sources[0]:
-            image_folder = self.list_data_dict[i]["data_path"]
+            # JJ: Use image_root if specified, otherwise use data_path
+            image_folder = self.list_data_dict[i].get("image_root", self.list_data_dict[i]["data_path"])
             image_file = self.list_data_dict[i]["image"]
             if isinstance(image_file, List):
                 if len(image_file) > 1:
@@ -345,8 +361,9 @@ class LazySupervisedDataset(Dataset):
                 torch.stack(grid_thw, dim=0),
             )
         elif "video" in sources[0]:
+            # JJ: Use video_root if specified, otherwise use data_path
+            video_folder = self.list_data_dict[i].get("video_root", self.list_data_dict[i]["data_path"])
             video_file = self.list_data_dict[i]["video"]
-            video_folder = self.list_data_dict[i]["data_path"]
             if isinstance(video_file, List):
                 if len(video_file) > 1:
                     video_file = [
