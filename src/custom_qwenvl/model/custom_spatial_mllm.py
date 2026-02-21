@@ -70,6 +70,11 @@ class CustomSpatialMLLMForConditionalGeneration(Qwen2_5_VLForConditionalGenerati
         # Initialize weights and apply final processing
         self.post_init()
 
+        # JJ: Manual control flag for connector fusion (set manually when training)
+        # for effeciency if we only want PoseRoPE on qwen2.5VL model, not connector fusion
+        self.skip_connector = False
+        print(f"[INFO] skip_connector = {self.skip_connector}")
+
         # NOTE JJ
         # RoPE pose id compute mode + THW dim T HACK
         self.position_ids_compute_mode = "mRoPE" # "mRoPE_readaptT" "mRoPE_woT"
@@ -202,12 +207,18 @@ class CustomSpatialMLLMForConditionalGeneration(Qwen2_5_VLForConditionalGenerati
                 spatial_embeds_list, patch_start_idx = self.spatial_encoder(image_tchw)
 
                 # fuse video and spatial embeddings
-                fused_embeds,_, _ = self.connector(
-                    image_embeds=image_embeds,
-                    spatial_embeds_list=spatial_embeds_list,
-                    patch_start_idx=patch_start_idx,
-                    grid_thw=image_grid_thw,
-                )
+                # JJ: Conditional fusion based on skip_connector flag
+                if self.skip_connector:
+                    # Skip connector fusion, use visual embeddings only
+                    fused_embeds = image_embeds
+                else:
+                    # Standard fusion via connector
+                    fused_embeds, _, _ = self.connector(
+                        image_embeds=image_embeds,
+                        spatial_embeds_list=spatial_embeds_list,
+                        patch_start_idx=patch_start_idx,
+                        grid_thw=image_grid_thw,
+                    )
 
                 mask = input_ids == self.config.image_token_id
                 mask_unsqueezed = mask.unsqueeze(-1)
@@ -241,13 +252,18 @@ class CustomSpatialMLLMForConditionalGeneration(Qwen2_5_VLForConditionalGenerati
                 # Reuse qv2.5 vision encoder (merge 2 temporal frame via tublar)
                 # 3d feature from VGGT (visual_temporal_merge_size) is also rearraged below with 2 tem frames as one.
                 # TODO: adjust fusion; effectiveness of fusion
-                # fused_embeds = self.connector(
-                fused_embeds, _, _ = self.connector(
-                    video_embeds=video_embeds,
-                    spatial_embeds_list=spatial_embeds_list,
-                    patch_start_idx=patch_start_idx,
-                    grid_thw=video_grid_thw,
-                )
+                # JJ: Conditional fusion based on skip_connector flag
+                if self.skip_connector:
+                    # Skip connector fusion, use visual embeddings only (but keep pose for RoPE)
+                    fused_embeds = video_embeds
+                else:
+                    # Standard fusion via connector
+                    fused_embeds, _, _ = self.connector(
+                        video_embeds=video_embeds,
+                        spatial_embeds_list=spatial_embeds_list,
+                        patch_start_idx=patch_start_idx,
+                        grid_thw=video_grid_thw,
+                    )
 
                 mask = input_ids == self.config.video_token_id
                 mask_unsqueezed = mask.unsqueeze(-1)
