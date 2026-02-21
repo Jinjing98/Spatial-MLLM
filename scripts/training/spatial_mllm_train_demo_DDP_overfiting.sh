@@ -1,4 +1,6 @@
 #!/bin/bash
+
+
 set -euo pipefail
 
 # Set environment variables
@@ -20,15 +22,15 @@ DATASETS="sqa3d_filtered_40k_small" # default "sqa3d_filtered_40k,sqa3d_filtered
 export DATASET_ROOT
 # JJ Freq Edit
 OUTPUT_ROOT="/mnt/nct-zfs/TCO-Test/jinjingxu/exps/train/spatialmllm"
-TRAIN_EPOCHS=5 # default 1 
-NUM_WORKERS=2 # default 8, set to 0 to avoid multiprocessing overhead
+TRAIN_EPOCHS=1000 # default 1 
+NUM_WORKERS=0 # default 8, set to 0 to avoid multiprocessing overhead
 NPROC_PER_NODE=1 # default 6 
-GRAD_ACCUM_STEPS=8 # JJ: reduced from 8 to match 4-sample debug dataset (4 samples / 2 GPUs = 2 per GPU)
+GRAD_ACCUM_STEPS=1 # JJ: reduced from 8 to match 4-sample debug dataset (4 samples / 2 GPUs = 2 per GPU)
 BATCH_SIZE=1 # default 1 
 VIDEO_MAX_FRAMES=16 # default 16
 VIDEO_MIN_FRAMES=16 # default 16
 VIDEO_FRAME_FPS=4 # default 4
-GRADIENT_CHECKPOINTING=True # default False
+GRADIENT_CHECKPOINTING=False # default False
 MODEL_TYPE="custom-spatial-mllm" #"custom-spatial-mllm" # spatial-mllm
 PRETRAINED_MODEL_NAME_OR_PATH="Qwen/Qwen2.5-VL-3B-Instruct"
 RUN_NAME_APPENDIX="_2x8_tso"
@@ -110,13 +112,13 @@ args="
     --video_frame_fps ${VIDEO_FRAME_FPS} \
     --eval_strategy "no" \
     --save_strategy "steps" \
-    --save_steps 0.0625 \
+    --save_steps 1.0 \
     --learning_rate ${lr} \
     --mm_projector_lr ${mm_projector_lr} \
     --weight_decay ${weight_decay} \
     --warmup_ratio 0.03 \
     --max_grad_norm ${max_grad_norm} \
-    --lr_scheduler_type "cosine" \
+    --lr_scheduler_type "constant_with_warmup" \
     --logging_steps 1 \
     --model_max_length 8192 \
     --gradient_checkpointing ${GRADIENT_CHECKPOINTING} \

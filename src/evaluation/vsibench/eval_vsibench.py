@@ -385,12 +385,26 @@ def print_latex_results(metrics: Dict, model_name: str, dataset_metrics: Dict[st
     print("="*80 + "\n")
 
 
-def evaluate_vsibench(vsi_data, model_type, model_path, batch_size, video_dir, output_path, video_nframes, sample_fps=None, use_visual=None, use_geo=None):
+def evaluate_vsibench(vsi_data, model_type, model_path, batch_size, video_dir, output_path, video_nframes, sample_fps=None, use_visual=None, use_geo=None, use_pose_rope=False, pose_enc_type="PTHW"):
     """Evaluate model on a specific dataset. Forces batch size to 1."""
 
     setup_logging()
     # JJ: load model and processor with customized use_visual/use_geo
     model, processor = load_model_and_processor(model_type, model_path, use_visual=use_visual, use_geo=use_geo)
+    
+    # 🆕 NEW: Apply Pose RoPE monkey patch for custom-spatial-mllm
+    if model_type == "custom-spatial-mllm" and use_pose_rope:
+        from src.custom_qwenvl.model.custom_spatial_mllm_pose_rope import patch_model_with_pose_rope
+        model = patch_model_with_pose_rope(
+            model,
+            use_pose_rope=True,
+            pose_enc_type=pose_enc_type,
+            # Note: All Temporal & Pose parameters are inherited from model.__init__
+        )
+        print(f"[Evaluation] ✅ Monkey patch applied: Model now uses 4D Pose-aware RoPE (P+T+H+W)")
+    elif model_type == "custom-spatial-mllm" and not use_pose_rope:
+        print(f"[Evaluation] ℹ️  Using standard 3D mRoPE (T+H+W)")
+    
     final_output = []
 
     for i in tqdm(range(0, len(vsi_data), batch_size), desc="Evaluating VSIBench"):
@@ -407,10 +421,10 @@ def evaluate_vsibench(vsi_data, model_type, model_path, batch_size, video_dir, o
     return final_output
 
 
-def run_worker(gpu_id, vsi_data, model_type, model_path, batch_size, video_dir, output_path, video_nframes, sample_fps=None, use_visual=None, use_geo=None):
+def run_worker(gpu_id, vsi_data, model_type, model_path, batch_size, video_dir, output_path, video_nframes, sample_fps=None, use_visual=None, use_geo=None, use_pose_rope=False, pose_enc_type="PTHW"):
     """Worker function to run evaluation on a specific GPU."""
     os.environ["CUDA_VISIBLE_DEVICES"] = str(gpu_id)
-    evaluate_vsibench(vsi_data, model_type, model_path, batch_size, video_dir, output_path, video_nframes, sample_fps, use_visual, use_geo)
+    evaluate_vsibench(vsi_data, model_type, model_path, batch_size, video_dir, output_path, video_nframes, sample_fps, use_visual, use_geo, use_pose_rope, pose_enc_type)
 
 
 def main(args):
@@ -490,6 +504,8 @@ def main(args):
                     args.sample_fps,
                     args.use_visual,
                     args.use_geo,
+                    args.use_pose_rope,
+                    args.pose_enc_type,
                 ),
             )
             p.start()
@@ -675,6 +691,9 @@ if __name__ == "__main__":
     # JJ: connector config
     parser.add_argument("--use_visual", type=lambda x: x.lower() == 'true', default=None, help="Use visual embeddings (true/false, default: None for model default)")
     parser.add_argument("--use_geo", type=lambda x: x.lower() == 'true', default=None, help="Use geo embeddings (true/false, default: None for model default)")
+    # JJ: 4D Pose RoPE config
+    parser.add_argument("--use_pose_rope", action="store_true", default=False, help="Enable 4D Pose-aware RoPE (P+T+H+W) instead of 3D mRoPE (T+H+W)")
+    parser.add_argument("--pose_enc_type", type=str, default="PTHW", help="Pose encoding type (only 'PTHW' supported now)")
     # JJ : skip flags for eval / metric phases
     parser.add_argument("--skip_eval", action="store_true", default=False, help="Skip the evaluation (inference) phase, only compute metrics from existing results.")
     parser.add_argument("--skip_metric", action="store_true", default=False, help="Skip the metrics computation phase, only run evaluation.")

@@ -22,10 +22,10 @@ VIDEO_PATH="datasets/fool_mllm/42446103_sa16_reference" # given sampled video pa
 # VIDEO_PATH="datasets/fool_mllm/41069063_realdir" # given sampled video path
 # VIDEO_PATH="datasets/fool_mllm/42446103_realdir" # given sampled video path
 # VIDEO_PATH="datasets/vsibench/arkitscenes/41069025.mp4" # given sampled video path
-# VIDEO_PATH="datasets/vsibench/sa_sampling_16f/arkitscenes/41069025" # given sampled video path
+VIDEO_PATH="datasets/vsibench/sa_sampling_16f/arkitscenes/41069025" # given sampled video path
 # VIDEO_PATH="datasets/vsibench/uniform_sampling_16f/arkitscenes/41069025" # given sampled video path
-VIDEO_PATH='datasets/vsibench/mergeaware_sa_sampling_16f_nbraft_idxss100_single_video/arkitscenes/42446103'
-# VIDEO_PATH='datasets/vsibench/sa_sampling_8f_single_video/arkitscenes/42446103'
+# VIDEO_PATH='datasets/vsibench/mergeaware_sa_sampling_16f_nbraft_idxss100_single_video/arkitscenes/42446103'
+# VIDEO_PATH='datasets/vsibench/sa_sampling_8f_single_video/arkitscenes/41069025'
 # VIDEO_PATH='datasets/vsibench/sa_sampling_8f_single_video/arkitscenes/42446103'
 # VIDEO_PATH='datasets/vsibench/fps_sampling_8f_single_video/arkitscenes/42446103'
 # VIDEO_PATH='datasets/vsibench/sa_sampling_16f_single_video/arkitscenes/42446103'
@@ -41,12 +41,14 @@ EXTRA_ARGS=("$@")
 
 # Build final ARGS array with all parameters
 # e.g. bash inference.sh --mp4_nframes None --sample_fps 1.0 --use_visual False --use_geo True
+# e.g. bash inference.sh --use_pose_rope  # Enable 4D Pose RoPE
 ARGS=(
     --model_path "${MODEL_PATH}"
     --model_type "${MODEL_TYPE}"
     --video_path "${VIDEO_PATH}"
     --text "${TEXT}"
     "${EXTRA_ARGS[@]}"
+    # --use_pose_rope True
 )
 
 python src/inference.py "${ARGS[@]}"

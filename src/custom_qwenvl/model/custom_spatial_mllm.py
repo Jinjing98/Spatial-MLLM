@@ -72,16 +72,25 @@ class CustomSpatialMLLMForConditionalGeneration(Qwen2_5_VLForConditionalGenerati
 
         # NOTE JJ
         # RoPE pose id compute mode + THW dim T HACK
-        self.position_ids_compute_mode = "mRoPE_readaptT" # "mRoPE_readaptT" "mRoPE_woT"
+        self.position_ids_compute_mode = "mRoPE" # "mRoPE_readaptT" "mRoPE_woT"
         assert self.position_ids_compute_mode in ["mRoPE_woT", "mRoPE", "mRoPE_readaptT"]
         
-        # JJ: Frame aggregation strategy for mRoPE_readaptT with temporal_patch_size > 1
-        # Options: 'mean', 'first', 'last', 'median'
-        self.adapt_strategy_with_temporal_merge = "mean"  # Default: average frame IDs within each temporal patch
-        # This is consistent with mrope design for fair comparision
-        self.readapted_do_dynamic_scope = True  # Default: True, use T-length (llm_grid_t) related scaling
-        # this setting will enfoce the garnularity is not sensitive to input frames num.Maps frame_id range to [0, readapted_scope_resolution] for consistent temporal encoding
-        self.readapted_scope_resolution = 16.0  # Default: 16.0 for fairer temporal encoding across different frame sampling granularities
+        # ==================== Temporal RoPE Parameters ====================
+        # JJ: Temporal dimension readaptation strategy (for 3D mRoPE)
+        self.temporal_readapted_merge_strategy = "mean"  # Options: 'mean', 'first', 'last', 'median'
+        self.temporal_readapted_use_dynamic_scale_factor = True  # Use dynamic scale based on T-length
+        self.temporal_readapted_scale_factor = 16.0  # Fixed scale factor if not dynamic
+        
+        # ==================== Pose RoPE Parameters ====================
+        # JJ: Pose dimension encoding strategy (for 4D Pose-aware RoPE)
+        self.pose_scale_factor = 16.0  # Scale factor for Pose normalization [0, scale_factor]
+        self.pose_merge_strategy = "mean"  # Options: 'mean', 'first', 'last', 'median' (default: same as temporal)
+        self.pose_use_dynamic_scale_factor = True  # Use dynamic scale based on pose count
+        self.pose_anchor_rereference_strategy = 'first'  # Options: 'first', 'medoid' - Re-reference all poses to anchor frame
+        self.pose_id_scalar_lambda_trans = 1.0  # Balance weight between rotation and translation in Lie scalar computation
+        # Internal parameters (not exposed to user)
+        self.hard_reset_reference_after_pose_merge = True  # Re-normalize after aggregation
+        self.do_offset_in_pose_pos_id = True  # Add sequential offset to Pose dimension
         
         # RoPE attention in custom decoder layer
         self.RoPE_attn_mode = 'default' # 'PRoPE4VisionToken' # use position_ids
@@ -261,7 +270,7 @@ class CustomSpatialMLLMForConditionalGeneration(Qwen2_5_VLForConditionalGenerati
             ):
                 # JJ
                 assert self.position_ids_compute_mode in ["mRoPE_woT", "mRoPE", "mRoPE_readaptT"]
-                if self.position_ids_compute_mode == "mRoPE":
+                if self.position_ids_compute_mode == "mRoPE_readaptT":
                     assert selected_frames is not None, "`selected_frames` must be provided when `position_ids_compute_mode` is `mRoPE_readaptT`"
                 
                 position_ids, rope_deltas, visual_token_mask = custom_get_rope_index(
@@ -275,32 +284,34 @@ class CustomSpatialMLLMForConditionalGeneration(Qwen2_5_VLForConditionalGenerati
                     position_ids_compute_mode=self.position_ids_compute_mode,
                     selected_frames_id=selected_frames,
                     temporal_patch_size=self.model.config.vision_config.temporal_patch_size,
-                    adapt_strategy_with_temporal_merge=self.adapt_strategy_with_temporal_merge,  # JJ: New parameter
-                    readapted_do_dynamic_scope=self.readapted_do_dynamic_scope,  # JJ: Dynamic scope flag
-                    readapted_scope_resolution=self.readapted_scope_resolution,  # JJ: Fixed temporal resolution for mRoPE_readaptT
+                    temporal_readapted_merge_strategy=self.temporal_readapted_merge_strategy,  # JJ: Renamed
+                    temporal_readapted_use_dynamic_scale_factor=self.temporal_readapted_use_dynamic_scale_factor,  # JJ: Renamed
+                    temporal_readapted_scale_factor=self.temporal_readapted_scale_factor,  # JJ: Renamed
                 )
                 self.visual_token_mask = visual_token_mask # JJ. Indicate in current tokens, what are the vision ones.
                 self.rope_deltas = rope_deltas
 
-                if self.offline_debug:
+                if self.offline_debug or True:
                     print(f"*"*20)
                     print(f"Details During Prefill:")
-                    # print(f"image_grid_thw: {image_grid_thw}") # None
-                    print(f"video_grid_thw: {video_grid_thw}") # 8 46 34
-                    print(f"second_per_grid_ts: {second_per_grid_ts}")
-                    print(f"Prefill Position_ids:") # 3, batch_size, seq_length
-                    print(f"{position_ids.shape}") # 3, batch_size, seq_length e.g. 3,1,3210
+                    print(f"video_grid_thw: {video_grid_thw}")
+                    num_visual_tokens = video_grid_thw[0][0] * video_grid_thw[0][1] * video_grid_thw[0][2] // (2*2)
+                    per_image_token_num=video_grid_thw[0][1] * video_grid_thw[0][2] // (2*2)
+                    num_pre_text = 15
+                    num_post_text = position_ids.shape[2] - num_visual_tokens - num_pre_text
+                    inspect_range = num_visual_tokens + num_pre_text + 5
 
+                    print(f"second_per_grid_ts: {second_per_grid_ts}")
+                    print(f"Prefill Position_ids:")
+                    print(f"{position_ids.shape}")  # (3, B, L)
+                    
+                    # 3D position_ids debug output
                     print(f"Early Text Position_ids:")
-                    print(f"({position_ids[:,0,:18]})") # 3, batch_size, seq_length
-                    # print(f"Visual token mask: {self.visual_token_mask[0,:100]}")
+                    print(f"({position_ids[:,0,:num_pre_text+3]})")
                     print(f"Middle (vision) Position_ids:")
-                    #for example: there are (15*25)=375 tokens per img; 375*8=3000, 3210-3000=210 prompt token
-                    print(f"({position_ids[:,0,15:3128+15:391]})") # 3, batch_size, seq_length
-                    # print(f"Visual token mask: {self.visual_token_mask[0,1500:3000:125]}")
+                    print(f"({position_ids[:,0,num_pre_text:inspect_range:per_image_token_num//2]})")
                     print(f"Later (Most) Position_ids:")
-                    print(f"({position_ids[:,0,1580+15:1580+15+10]})") # 3, batch_size, seq_length
-                    # print(f"Visual token mask: {self.visual_token_mask[0, -10:]}")
+                    print(f"({position_ids[:,0,-(num_post_text+5):]})")
 
             # then use the prev pre-calculated rope-deltas to get the correct position ids
             else:

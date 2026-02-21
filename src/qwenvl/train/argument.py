@@ -15,6 +15,10 @@ class ModelArguments:
     tune_mm_vision: bool = field(default=False)
     tune_mm_spatial_encoder: bool = field(default=False)
     tune_mm_connector: bool = field(default=False)
+    
+    # JJ: 4D Pose RoPE config
+    use_pose_rope: bool = field(default=False, metadata={"help": "Enable 4D Pose-aware RoPE (P+T+H+W) instead of 3D mRoPE (T+H+W)"})
+    pose_enc_type: str = field(default="PTHW", metadata={"help": "Pose encoding type (only 'PTHW' supported now)"})
 
 @dataclass
 class DataArguments:

@@ -17,10 +17,11 @@ def compute_pose_farness(
     trans_metric_mode: str = 'euclidean',
     rot_metric_mode: str = 'angle_axis',
     reorth_rot: bool = True,
-    translation_scale: Union[None, float] = 1.0
+    translation_scale: Union[None, float] = 1.0,
+    reference_frame_id: int = 0
 ) -> Tuple[List[float], List[float]]:
     """
-    Compute farness (distance) between camera poses relative to the first pose.
+    Compute farness (distance) between camera poses relative to a reference pose.
     Supports both NumPy arrays and PyTorch tensors.
     
     Args:
@@ -34,6 +35,7 @@ def compute_pose_farness(
         translation_scale: Scale factor for translation distances (default: 1.0)
             - None: Raw distances (no scaling)
             - 1.0: Normalize so max translation distance = 1.0
+        reference_frame_id: Index of the reference frame (default: 0)
     
     Returns:
         farness_trans: List of translation distances (same length as poses_c2w)
@@ -45,11 +47,11 @@ def compute_pose_farness(
             raise ValueError("Input poses_c2w is empty")
         if poses_c2w.ndim != 3 or poses_c2w.shape[1] != 4 or poses_c2w.shape[2] != 4:
             raise ValueError(f"Expected poses_c2w shape (N, 4, 4), got {poses_c2w.shape}")
-        return compute_pose_farness_torch(poses_c2w, trans_metric_mode, rot_metric_mode, reorth_rot, translation_scale)
+        return compute_pose_farness_torch(poses_c2w, trans_metric_mode, rot_metric_mode, reorth_rot, translation_scale, reference_frame_id)
     else:
         if not isinstance(poses_c2w, list) or len(poses_c2w) == 0:
             raise ValueError("Input poses_c2w must be a non-empty list")
-        return compute_pose_farness_numpy(poses_c2w, trans_metric_mode, rot_metric_mode, reorth_rot, translation_scale)
+        return compute_pose_farness_numpy(poses_c2w, trans_metric_mode, rot_metric_mode, reorth_rot, translation_scale, reference_frame_id)
 
 
 def compute_pose_farness_numpy(
@@ -57,7 +59,8 @@ def compute_pose_farness_numpy(
     trans_metric_mode: str = 'euclidean',
     rot_metric_mode: str = 'angle_axis',
     reorth_rot: bool = True,
-    translation_scale: Union[None, float] = 1.0
+    translation_scale: Union[None, float] = 1.0,
+    reference_frame_id: int = 0
 ) -> Tuple[List[float], List[float]]:
     """
     NumPy implementation of pose farness computation.
@@ -68,6 +71,7 @@ def compute_pose_farness_numpy(
         rot_metric_mode: Rotation distance metric
         reorth_rot: Before computing rotation metric, re-orthogonalize rotations using SVD (default: True)
         translation_scale: Scale factor for translation distances (default: 1.0)
+        reference_frame_id: Index of the reference frame (default: 0)
     
     Returns:
         farness_trans: List of translation distances
@@ -76,8 +80,14 @@ def compute_pose_farness_numpy(
     if len(poses_c2w) == 0:
         return [], []
     
-    # Reference pose is the first one
-    ref_c2w = np.array(poses_c2w[0])
+    # Validate reference_frame_id
+    if not (0 <= reference_frame_id < len(poses_c2w)):
+        raise ValueError(
+            f"reference_frame_id={reference_frame_id} out of range [0, {len(poses_c2w)})"
+        )
+    
+    # Reference pose is the specified one
+    ref_c2w = np.array(poses_c2w[reference_frame_id])
     ref_t = ref_c2w[:3, 3]
     ref_R = ref_c2w[:3, :3]
     
@@ -120,7 +130,8 @@ def compute_pose_farness_torch(
     trans_metric_mode: str = 'euclidean',
     rot_metric_mode: str = 'angle_axis',
     reorth_rot: bool = True,
-    translation_scale: Union[None, float] = 1.0
+    translation_scale: Union[None, float] = 1.0,
+    reference_frame_id: int = 0
 ) -> Tuple[List[float], List[float]]:
     """
     PyTorch implementation of pose farness computation.
@@ -131,6 +142,7 @@ def compute_pose_farness_torch(
         rot_metric_mode: Rotation distance metric
         reorth_rot: Before computing rotation metric, re-orthogonalize rotations using SVD (default: True)
         translation_scale: Scale factor for translation distances (default: 1.0)
+        reference_frame_id: Index of the reference frame (default: 0)
     
     Returns:
         farness_trans: List of translation distances
@@ -139,8 +151,14 @@ def compute_pose_farness_torch(
     if poses_c2w.shape[0] == 0:
         return [], []
     
-    # Reference pose is the first one
-    ref_c2w = poses_c2w[0]
+    # Validate reference_frame_id
+    if not (0 <= reference_frame_id < poses_c2w.shape[0]):
+        raise ValueError(
+            f"reference_frame_id={reference_frame_id} out of range [0, {poses_c2w.shape[0]})"
+        )
+    
+    # Reference pose is the specified one
+    ref_c2w = poses_c2w[reference_frame_id]
     ref_t = ref_c2w[:3, 3]
     ref_R = ref_c2w[:3, :3]
     
@@ -176,7 +194,6 @@ def compute_pose_farness_torch(
             farness_trans = [t * scale_factor for t in farness_trans]
     
     return farness_trans, farness_rot
-
 
 def _compute_translation_distance_numpy(t1: np.ndarray, t2: np.ndarray, mode: str) -> float:
     """
@@ -265,14 +282,31 @@ def _reorthogonalize_rotation_torch(R: torch.Tensor) -> torch.Tensor:
     
     Returns:
         Re-orthogonalized rotation matrix (3x3)
+    
+    Note:
+        SVD and det() are not implemented for BFloat16, so we temporarily convert to float32
+        and explicitly disable autocast to prevent automatic conversion back to BF16.
+        This ensures compatibility with mixed precision training while maintaining
+        numerical accuracy for the orthogonalization process.
     """
-    U, _, Vt = torch.linalg.svd(R)
-    R_orth = U @ Vt
-    # Ensure proper rotation (det = 1, not reflection with det = -1)
-    if torch.det(R_orth) < 0:
-        U[:, -1] *= -1
+    # JJ: Save original dtype
+    original_dtype = R.dtype
+    
+    # JJ: Explicitly disable autocast context to prevent BF16 conversion
+    with torch.cuda.amp.autocast(enabled=False):
+        R_fp32 = R.float()  # Convert to float32 for numerical operations
+        
+        U, _, Vt = torch.linalg.svd(R_fp32)
         R_orth = U @ Vt
-    return R_orth
+        
+        # Ensure proper rotation (det = 1, not reflection with det = -1)
+        # Must check det in FP32 before converting back
+        if torch.det(R_orth) < 0:
+            U[:, -1] *= -1
+            R_orth = U @ Vt
+    
+    # JJ: Convert back to original dtype only after all operations
+    return R_orth.to(original_dtype)
 
 
 def _compute_rotation_distance_torch(R1: torch.Tensor, R2: torch.Tensor, mode: str) -> float:
@@ -316,35 +350,34 @@ def _rotation_matrix_to_angle_torch(R: torch.Tensor) -> torch.Tensor:
 
 def compute_lie_scalar_index_torch(
     poses_c2w: torch.Tensor,
-    lambda_trans: float = 1.0, # JJ FIXME. MAY NEED TO TUNE
+    pose_id_scalar_lambda_trans: float = 1.0,  # JJ: Balance weight between rotation and translation
     traj_scale_norm: bool = True,
     global_normalize: bool = True,
-    global_normalize_scale_factor: float = 16.0, #JJ FIXME 16.0 is related to training stas.
-    reorth_rot: bool = True
+    reorth_rot: bool = True,
+    reference_frame_id: int = 0
 ) -> torch.Tensor:
     """
-    Compute Lie-style scalar index for each pose relative to the first frame.
+    Compute Lie-style scalar index for each pose relative to a reference frame.
 
-    P_t = sqrt( theta_t^2 + (lambda_trans^2) * d_t^2 )
+    P_t = sqrt( theta_t^2 + (pose_id_scalar_lambda_trans^2) * d_t^2 )
 
     Notes:
         - traj_scale_norm: normalize translation per trajectory to [0,1] to
-          make lambda_trans weighting consistent across trajectories.
+          make pose_id_scalar_lambda_trans weighting consistent across trajectories.
         - global_normalize: optional, normalize final P to [0,1] for phase modulation.
-        - global_normalize_scale_factor: scale factor applied after global normalization
         - translation_scale inside compute_pose_farness_torch is set to None
           to disable internal auto-scaling; we handle normalization explicitly.
 
     Args:
         poses_c2w: (N,4,4) camera-to-world poses
-        lambda_trans: balance weight between rotation and translation
+        pose_id_scalar_lambda_trans: balance weight between rotation and translation
         traj_scale_norm: whether to normalize translation per trajectory (internal)
         global_normalize: optional normalize final P to [0,1] after lambda weighting
-        global_normalize_scale_factor: scale factor applied after normalization (default: 16.0)
         reorth_rot: whether to re-orthogonalize rotations
+        reference_frame_id: index of the reference frame (default: 0)
 
     Returns:
-        P: (N,) tensor, scalar index per frame
+        P: (N,) tensor, scalar index per frame, normalized to [0, 1] if global_normalize=True
     """
 
     # ------------------ REUSE ------------------
@@ -354,11 +387,13 @@ def compute_lie_scalar_index_torch(
         trans_metric_mode='euclidean',
         rot_metric_mode='angle_axis',
         reorth_rot=reorth_rot,
-        translation_scale=None  # disable auto-scaling inside function n doing externllay
+        translation_scale=None,  # disable auto-scaling inside function n doing externllay
+        reference_frame_id=reference_frame_id  # 🆕 NEW: pass reference frame id
     )
+    # ✏️ FIXED: Ensure tensors are created on the same device as input poses_c2w
     device = poses_c2w.device
-    trans = torch.tensor(farness_trans, device=device)
-    rot = torch.tensor(farness_rot, device=device)
+    trans = torch.tensor(farness_trans, dtype=torch.float32, device=device)
+    rot = torch.tensor(farness_rot, dtype=torch.float32, device=device)
     # ------------------ END REUSE ------------------
 
     # ------------------ NEW: per-trajectory translation normalization ------------------
@@ -369,14 +404,14 @@ def compute_lie_scalar_index_torch(
     # ------------------ END NEW ------------------
 
     # ------------------ NEW: fuse rotation and translation into scalar P ------------------
-    P = torch.sqrt(rot**2 + (lambda_trans**2) * trans**2)
+    P = torch.sqrt(rot**2 + (pose_id_scalar_lambda_trans**2) * trans**2)
     # ------------------ END NEW ------------------
 
     # ------------------ NEW: optional global normalization for phase modulation ------------------
     if global_normalize:
         max_val = P.max()
         if max_val > 0:
-            P = P / max_val * global_normalize_scale_factor
+            P = P / max_val  # Normalize to [0, 1]
     # ------------------ END NEW ------------------
 
     return P

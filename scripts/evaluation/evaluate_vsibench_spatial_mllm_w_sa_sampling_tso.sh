@@ -75,6 +75,32 @@ MODEL_NAME_SUFFIX=""
 
 MODEL_TYPE="custom-spatial-mllm"
 MODEL_NAME_SUFFIX="adaptedPosID_RoPE"
+
+
+# MODEL_TYPE="qwen2.5-vl"
+# MODEL_PATH='Qwen/Qwen2.5-VL-3B-Instruct'
+
+MODEL_TYPE="spatial-mllm"
+# MODEL_TYPE="custom-spatial-mllm"
+MODEL_PATH="${MODELS_ROOT}/checkpoints/Spatial-MLLM-v1.1-Instruct-135K"
+MODEL_TYPE="spatial-mllm"
+# MODEL_TYPE="custom-spatial-mllm"
+# MODEL_TYPE="qwen2.5-vl"
+# MODEL_PATH='Qwen/Qwen2.5-VL-3B-Instruct'
+# MODEL_TYPE="qwen2.5-vl"
+# MODEL_PATH='Qwen/Qwen2.5-VL-3B-Instruct'
+# MODEL_TYPE="spatial-mllm"
+# MODEL_TYPE="custom-spatial-mllm"
+# JJ: Fixed default values (not overridable by env vars)
+# MODEL_TYPE="qwen2.5-vl"
+# MODEL_PATH="Qwen/Qwen2.5-VL-3B-Instruct"
+MODEL_TYPE="qwen3-vl"
+MODEL_PATH="Qwen/Qwen3-VL-2B-Instruct"
+# MODEL_TYPE="spatial-mllm"
+MODEL_TYPE="custom-spatial-mllm"
+MODEL_PATH="Diankun/Spatial-MLLM-v1.1-Instruct-135K"
+MODEL_NAME_SUFFIX=""
+
 MODEL_NAME="${MODEL_TYPE}${MODEL_NAME_SUFFIX}"
 
 # nframes=(None)
@@ -150,6 +176,7 @@ for nframe in "${nframes[@]}"; do
         --video_dir "${DATA_ROOT}/vsibench/sa_sampling_${nframe}f" \
         --batch_size 1 \
         --output_dir "$EXP_DIR" \
+        --use_pose_rope \
         --output_name "eval_result" \
         $EXTRA_ARGS \
         2>&1 | tee -a "$LOG_FILE"
