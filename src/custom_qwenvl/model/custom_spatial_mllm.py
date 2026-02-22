@@ -72,8 +72,9 @@ class CustomSpatialMLLMForConditionalGeneration(Qwen2_5_VLForConditionalGenerati
 
         # JJ: Manual control flag for connector fusion (set manually when training)
         # for effeciency if we only want PoseRoPE on qwen2.5VL model, not connector fusion
-        self.skip_connector = False
-        print(f"[INFO] skip_connector = {self.skip_connector}")
+        self.skip_connector = True #used to train custom spatialmllm
+        self.skip_connector = False #used to eval spatialmllm
+        print(f"[INFO] Force skip_connector = {self.skip_connector} in {config.model_type}")
 
         # NOTE JJ
         # RoPE pose id compute mode + THW dim T HACK
@@ -99,7 +100,7 @@ class CustomSpatialMLLMForConditionalGeneration(Qwen2_5_VLForConditionalGenerati
         
         # RoPE attention in custom decoder layer
         self.RoPE_attn_mode = 'default' # 'PRoPE4VisionToken' # use position_ids
-        self.RoPE_attn_mode = 'PRoPE4VisionToken' # 'PRoPE4VisionToken' # use position_ids
+        # self.RoPE_attn_mode = 'PRoPE4VisionToken' # 'PRoPE4VisionToken' # use position_ids
         assert self.RoPE_attn_mode in ['default', 'PRoPE4VisionToken']
         # Used to indenty visual tokens for PRoPE
         self.visual_token_mask = None # directly aligned with position_ids len
@@ -307,7 +308,7 @@ class CustomSpatialMLLMForConditionalGeneration(Qwen2_5_VLForConditionalGenerati
                 self.visual_token_mask = visual_token_mask # JJ. Indicate in current tokens, what are the vision ones.
                 self.rope_deltas = rope_deltas
 
-                if self.offline_debug or True:
+                if self.offline_debug:
                     print(f"*"*20)
                     print(f"Details During Prefill:")
                     print(f"video_grid_thw: {video_grid_thw}")
@@ -376,7 +377,8 @@ class CustomSpatialMLLMForConditionalGeneration(Qwen2_5_VLForConditionalGenerati
         
         intrisics_down, extrinsics_w2c_down = downsample_cams(self.intrisics, self.extrinsics_w2c, 
                                         temporal_patch_size=2, 
-                                        extrinsics_sample_strategy="mean")
+                                        extrinsics_sample_strategy="mean",
+                                        )
         
         # JJ: Debug - Check after downsampling
         if intrisics_down is not None and torch.isnan(intrisics_down).any():
