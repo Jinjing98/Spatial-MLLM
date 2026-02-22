@@ -48,12 +48,19 @@ pwd
 BASE_DIR="${DATA_ROOT}/vsibench"
 
 # Number of frames to sample
+# NUM_FRAMES="${NUM_FRAMES:-64}"
 NUM_FRAMES="${NUM_FRAMES:-32}"
 # NUM_FRAMES="${NUM_FRAMES:-16}"
 # NUM_FRAMES="${NUM_FRAMES:-8}"
 # Sampling type: "fps" or "efficient"
-# SAMPLING_TYPE="${SAMPLING_TYPE:-fps}"
 SAMPLING_TYPE="${SAMPLING_TYPE:-fps}"
+SAMPLING_TYPE_OUTPUT_FOLDER_NAME_APPENDIX="_stdnorm_medoid"
+
+# SAMPLING_TYPE="${SAMPLING_TYPE:-efficient}"
+# SAMPLING_TYPE_OUTPUT_FOLDER_NAME_APPENDIX=""
+
+# JJ for detailed the hyper per strategy
+SAMPLING_TYPE_OUTPUT_FOLDER_NAME="${SAMPLING_TYPE}${SAMPLING_TYPE_OUTPUT_FOLDER_NAME_APPENDIX}"
 
 # Predictions root (must exist, from sa_sampling.py output)
 # Example: sa_sampling_16f, sa_sampling_128f, etc.
@@ -63,13 +70,13 @@ PREDICTIONS_ROOT="${PREDICTIONS_ROOT:-${DATA_ROOT}/vsibench/${VGGT_PRECOMPUTED_D
 # ============================================================================
 # FPS Sampling Parameters
 # ============================================================================
-FPS_DISTANCE_MODE="${FPS_DISTANCE_MODE:-max_norm}"  # Options: l2, max_norm, fro, geodesic
-FPS_STARTING_MODE="${FPS_STARTING_MODE:-first}"    # Options: medoid, random, first
+FPS_DISTANCE_MODE="${FPS_DISTANCE_MODE:-data_driven}"  # #v0:max_norm Options: data_driven, max_norm, fro, geodesic
+FPS_STARTING_MODE="${FPS_STARTING_MODE:-medoid}"    # v0:first Options: medoid, random, first
 
 # ============================================================================
 # Efficient Sampling Parameters
 # ============================================================================
-EFFICIENT_SAMPLING_MODE="${EFFICIENT_SAMPLING_MODE:-hybrid}"     # Options: grid, hybrid, fps2d
+EFFICIENT_SAMPLING_MODE="${EFFICIENT_SAMPLING_MODE:-hybrid}"    #hybrid # Options: grid, hybrid, fps2d
 EFFICIENT_NORMALIZATION="${EFFICIENT_NORMALIZATION:-max_norm}"    # Options: max_norm, std_norm 
 EFFICIENT_DIAGONAL_PRIORITY="${EFFICIENT_DIAGONAL_PRIORITY:-0.0}"
 EFFICIENT_STARTING_MODE="${EFFICIENT_STARTING_MODE:-first}"    # Options: medoid, random, first
@@ -127,7 +134,7 @@ run_sampling() {
         python src/sampling/pa_sampling.py \
             --video_folder "${BASE_DIR}/${dataset}" \
             --model_path "${MODELS_ROOT}/Spatial-MLLM/checkpoints/VGGT-1B" \
-            --output_folder "${BASE_DIR}/${SAMPLING_TYPE}_sampling_${NUM_FRAMES}f/${dataset}" \
+            --output_folder "${BASE_DIR}/${SAMPLING_TYPE_OUTPUT_FOLDER_NAME}_sampling_${NUM_FRAMES}f/${dataset}" \
             --num_frames $NUM_FRAMES \
             --sampling_type "$SAMPLING_TYPE" \
             --predictions_root "${PREDICTIONS_ROOT}/${dataset}" \
@@ -141,7 +148,7 @@ run_sampling() {
         python src/sampling/pa_sampling.py \
             --video_folder "${BASE_DIR}/${dataset}" \
             --model_path "${MODELS_ROOT}/Spatial-MLLM/checkpoints/VGGT-1B" \
-            --output_folder "${BASE_DIR}/${SAMPLING_TYPE}_sampling_${NUM_FRAMES}f/${dataset}" \
+            --output_folder "${BASE_DIR}/${SAMPLING_TYPE_OUTPUT_FOLDER_NAME}_sampling_${NUM_FRAMES}f/${dataset}" \
             --num_frames $NUM_FRAMES \
             --sampling_type "$SAMPLING_TYPE" \
             --predictions_root "${PREDICTIONS_ROOT}/${dataset}" \

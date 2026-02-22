@@ -13,10 +13,17 @@ fot HW style, we extend with P.
 
 20.02
 Eval:
-qwen3 fps32
+2949219 qwen3 fps32
+2950453 sp mllm time_aware_Sa f8
+2950461 sp mllm time_aware_Sa + adapted f8
+2950467 sp mllm time_aware_Sa + adapted f16
+2950468 sp mllm time_aware_Sa + adapted f32
 
 Gen:
-hybrid 64
+2949458 effi_hybrid 64
+2950017 fps_mediod_stdnorm_8
+2950018 fps_mediod_stdnorm_16
+2950019 fps_mediod_stdnorm_32
 
 
 18.02

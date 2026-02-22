@@ -72,11 +72,11 @@ class CustomSpatialMLLMForConditionalGeneration(Qwen2_5_VLForConditionalGenerati
 
         # NOTE JJ
         # RoPE pose id compute mode + THW dim T HACK
-        self.position_ids_compute_mode = "mRoPE" # "mRoPE_readaptT" "mRoPE_woT"
+        self.position_ids_compute_mode = "mRoPE_readaptT" # "mRoPE_readaptT" "mRoPE_woT"
         assert self.position_ids_compute_mode in ["mRoPE_woT", "mRoPE", "mRoPE_readaptT"]
         # RoPE attention in custom decoder layer
         self.RoPE_attn_mode = 'default' # 'PRoPE4VisionToken' # use position_ids
-        self.RoPE_attn_mode = 'PRoPE4VisionToken' # 'PRoPE4VisionToken' # use position_ids
+        # self.RoPE_attn_mode = 'PRoPE4VisionToken' # 'PRoPE4VisionToken' # use position_ids
         assert self.RoPE_attn_mode in ['default', 'PRoPE4VisionToken']
         # Used to indenty visual tokens for PRoPE
         self.visual_token_mask = None # directly aligned with position_ids len
@@ -334,7 +334,8 @@ class CustomSpatialMLLMForConditionalGeneration(Qwen2_5_VLForConditionalGenerati
         
         intrisics_down, extrinsics_w2c_down = downsample_cams(self.intrisics, self.extrinsics_w2c, 
                                         temporal_patch_size=2, 
-                                        extrinsics_sample_strategy="mean")
+                                        extrinsics_sample_strategy="mean",
+                                        )
         
         # JJ: Debug - Check after downsampling
         if intrisics_down is not None and torch.isnan(intrisics_down).any():
