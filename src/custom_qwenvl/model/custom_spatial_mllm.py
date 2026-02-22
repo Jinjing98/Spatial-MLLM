@@ -72,8 +72,9 @@ class CustomSpatialMLLMForConditionalGeneration(Qwen2_5_VLForConditionalGenerati
 
         # JJ: Manual control flag for connector fusion (set manually when training)
         # for effeciency if we only want PoseRoPE on qwen2.5VL model, not connector fusion
-        self.skip_connector = False
-        print(f"[INFO] skip_connector = {self.skip_connector}")
+        self.skip_connector = True #used to train custom spatialmllm
+        self.skip_connector = False #used to eval spatialmllm
+        print(f"[INFO] Force skip_connector = {self.skip_connector} in {config.model_type}")
 
         # NOTE JJ
         # RoPE pose id compute mode + THW dim T HACK
@@ -307,7 +308,7 @@ class CustomSpatialMLLMForConditionalGeneration(Qwen2_5_VLForConditionalGenerati
                 self.visual_token_mask = visual_token_mask # JJ. Indicate in current tokens, what are the vision ones.
                 self.rope_deltas = rope_deltas
 
-                if self.offline_debug or True:
+                if self.offline_debug:
                     print(f"*"*20)
                     print(f"Details During Prefill:")
                     print(f"video_grid_thw: {video_grid_thw}")

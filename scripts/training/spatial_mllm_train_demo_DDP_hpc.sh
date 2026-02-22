@@ -5,7 +5,7 @@
 #SBATCH --gres=gpu:2           # use 1 GPU per node (i.e. use one GPU per task)
 #SBATCH --gpus-per-task=2 #JJ was 1 for init 2 sft models
 #SBATCH --cpus-per-task=8
-#SBATCH --time=40:00:00
+#SBATCH --time=60:00:00
 #SBATCH --mem=80G
 #SBATCH --partition=capella
 #SBATCH --mail-user=xvjinjing8@gmail.com
@@ -35,6 +35,12 @@ PRETRAINED_CKPT_ROOT="/data/horse/ws/jixu233b-metadata_ws/models/Spatial-MLLM/"
 DATASET_ROOT="/data/horse/ws/jixu233b-metadata_ws/datasets/SQA3D"  # Dataset root directory
 DATASETS="sqa3d_filtered_40k" # default "sqa3d_filtered_40k,sqa3d_filtered_40k_small"
 
+DATASET_ROOT="/data/horse/ws/jixu233b-metadata_ws/datasets/ViCA-322K"
+# Use 50% of ViCA data
+DATASETS="vica_322k_all%50"
+DATASETS="vica_322k_base%50"
+# DATASETS="vica_322k_arkitscenes"  # All ARKitScenes data
+
 # DATASET_ROOT="/data/horse/ws/jixu233b-metadata_ws/datasets/vsibench"  # Dataset root directory
 # Export DATASET_ROOT for Python scripts (__init__.py) to use for data loading
 export DATASET_ROOT
@@ -49,9 +55,18 @@ VIDEO_MAX_FRAMES=16 # default 16
 VIDEO_MIN_FRAMES=16 # default 16
 VIDEO_FRAME_FPS=4 # default 4
 GRADIENT_CHECKPOINTING=True # default False
-MODEL_TYPE="spatial-mllm" #"custom-spatial-mllm" # spatial-mllm
+MODEL_TYPE="custom-spatial-mllm" #"custom-spatial-mllm" # spatial-mllm
+# MODEL_TYPE="spatial-mllm" #"custom-spatial-mllm" # spatial-mllm
 PRETRAINED_MODEL_NAME_OR_PATH="Qwen/Qwen2.5-VL-3B-Instruct"
-RUN_NAME_APPENDIX="_2x8_hpc"
+# RUN_NAME_APPENDIX="_PTHW_1st_skipCnc_2x8_hpc"
+RUN_NAME_APPENDIX="_PTHW_medoid_skipCnc_2x8_hpc"
+# RUN_NAME_APPENDIX="_PTHW_1st_ACTUAL_skipCnc_2x8_hpc"
+# RUN_NAME_APPENDIX="_PTHW_medoid_ACTUAL_skipCnc_2x8_hpc"
+# RUN_NAME_APPENDIX="_baseline_spmllm_2x8_hpc"
+# RUN_NAME_APPENDIX="_baseline_qwen25_skipCnc_2x8_hpc"
+# JJ: 4D Pose RoPE config (only for custom-spatial-mllm)
+USE_POSE_ROPE=True  # Set to True to enable 4D Pose-aware RoPE
+POSE_ENC_TYPE="PTHW"  # Pose encoding type (only 'PTHW' supported)
 
 # Distributed training configuration
 MASTER_ADDR=${MASTER_ADDR:-"127.0.0.1"}
@@ -111,7 +126,7 @@ args="
     --dataset_use ${DATASETS} \
     --tune_mm_vision False \
     --tune_mm_spatial_encoder False \
-    --tune_mm_connector True \
+    --tune_mm_connector False \
     --tune_mm_llm True \
     --bf16 \
     --output_dir ${output_dir} \
@@ -142,6 +157,12 @@ args="
     --run_name ${run_name}"
     #  \
     # --report_to wandb"
+
+# JJ: Add Pose RoPE args if enabled (only for custom-spatial-mllm)
+if [ "$USE_POSE_ROPE" = "True" ] || [ "$USE_POSE_ROPE" = "true" ]; then
+    args="$args --use_pose_rope --pose_enc_type ${POSE_ENC_TYPE}"
+    echo "[Training] 4D Pose RoPE enabled: pose_enc_type=${POSE_ENC_TYPE}"
+fi
 
 # Launch training (native PyTorch without DeepSpeed)
 # python ${entry_file} ${args} 2>&1 | tee -a "${logfile}"

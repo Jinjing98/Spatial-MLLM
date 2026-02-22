@@ -60,12 +60,17 @@ SAMPLING_QUERY_NAME='_efficient_sampling_grid' #_fps_sampling _efficient_samplin
 METRICS_FILE_FORMAT="metrics_${MODEL_QUERY_NAME}.json"
 METRICS_FILE_FORMAT="metrics_${MODEL_QUERY_NAME_AVG_ONLY}.json"
 
-# MODEL_QUERY_NAME="spatial-mllm*" 
-# MODEL_QUERY_NAME_AVG_ONLY="spatial-mllm"
-# SAMPLING_QUERY_NAME='_efficient_sampling' #_efficient_sampling _sa_sampling _efficient_sampling_grid
-# METRICS_FILE_FORMAT="metrics_${MODEL_QUERY_NAME}.json"
-# METRICS_FILE_FORMAT="metrics_${MODEL_QUERY_NAME_AVG_ONLY}.json"
+MODEL_QUERY_NAME="spatial-mllm*" 
+MODEL_QUERY_NAME_AVG_ONLY="spatial-mllm"
+SAMPLING_QUERY_NAME='_sa_sampling' #_efficient_sampling _sa_sampling _efficient_sampling_grid
+METRICS_FILE_FORMAT="metrics_${MODEL_QUERY_NAME}.json"
+METRICS_FILE_FORMAT="metrics_${MODEL_QUERY_NAME_AVG_ONLY}.json"
 
+MODEL_QUERY_NAME="spatial-mllm*" 
+MODEL_QUERY_NAME_AVG_ONLY="spatial-mllm"
+SAMPLING_QUERY_NAME='_fps_stdnorm_medoid_sampling' #_fps_stdnorm_medoid_sampling _efficient_sampling_v0_hybrid _efficient_sampling _sa_sampling _efficient_sampling_grid
+METRICS_FILE_FORMAT="metrics_${MODEL_QUERY_NAME}.json"
+METRICS_FILE_FORMAT="metrics_${MODEL_QUERY_NAME_AVG_ONLY}.json"
 
 QUERY_FORMATS=(results/vsibench${SAMPLING_QUERY_NAME}/${MODEL_QUERY_NAME}/eval_result/${METRICS_FILE_FORMAT})
 echo "Query format: ${QUERY_FORMATS}"

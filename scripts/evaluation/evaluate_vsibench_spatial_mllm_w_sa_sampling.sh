@@ -27,8 +27,8 @@ SFT_MODELS_ROOT='/data/horse/ws/jixu233b-metadata_ws/exps/train/spatialmllm'
 
 # activate conda
 source /software/rapids/r24.10/Anaconda3/2024.02-1/etc/profile.d/conda.sh
-# conda activate /data/horse/ws/jixu233b-3d_ws/envs/spatial-mllm
-conda activate /data/horse/ws/jixu233b-3d_ws/envs/transformers_v5
+conda activate /data/horse/ws/jixu233b-3d_ws/envs/spatial-mllm
+# conda activate /data/horse/ws/jixu233b-3d_ws/envs/transformers_v5
 module load CUDA/12.4.0 # nvcc
 
 cd "$(dirname "$0")"
@@ -77,12 +77,14 @@ MODEL_TYPE="qwen3-vl"
 MODEL_PATH="Qwen/Qwen3-VL-2B-Instruct"
 MODEL_NAME_SUFFIX=""
 
-# MODEL_TYPE="custom-spatial-mllm"
-# MODEL_PATH="Diankun/Spatial-MLLM-v1.1-Instruct-135K"
-# MODEL_NAME_SUFFIX="adapted"
-# MODEL_NAME_SUFFIX="woT"
-# MODEL_NAME_SUFFIX="adapted_PRoPE"
-# MODEL_NAME_SUFFIX="pRoPE"
+MODEL_TYPE="custom-spatial-mllm"
+MODEL_PATH="Diankun/Spatial-MLLM-v1.1-Instruct-135K"
+MODEL_NAME_SUFFIX="adapted_PRoPE"
+MODEL_NAME_SUFFIX="woT"
+MODEL_NAME_SUFFIX="pRoPE"
+MODEL_NAME_SUFFIX="PTHWrope_1stOrderPose"
+MODEL_NAME_SUFFIX="PTHWrope_medoidOrderPose"
+MODEL_NAME_SUFFIX="adapted"
 
 # MODEL_TYPE="spatial-mllm"
 # MODEL_PATH="Diankun/Spatial-MLLM-v1.1-Instruct-135K"
@@ -119,11 +121,13 @@ for nframe in "${nframes[@]}"; do
     TIMESTAMP=$(date +"%Y%m%d_%H%M%S")
 
     # JJ
-    # SAMPLING='sa_sampling'
-    # MERGEAWARE_DETAILS=''
-    SAMPLING='fps_sampling'
+    SAMPLING='sa_sampling'
     MERGEAWARE_DETAILS=''
+    # SAMPLING='fps_stdnorm_medoid_sampling'
+    # MERGEAWARE_DETAILS=''
     # SAMPLING='efficient_sampling'
+    # MERGEAWARE_DETAILS=''
+    # SAMPLING='efficient_sampling_v0_hybrid'
     # MERGEAWARE_DETAILS=''
     # SAMPLING='efficient_sampling_grid'
     # MERGEAWARE_DETAILS=''
@@ -195,6 +199,7 @@ for nframe in "${nframes[@]}"; do
         $EXTRA_ARGS \
         2>&1 | tee -a "$LOG_FILE"
         # --skip_eval --input_dir "$EXISTING_INPUT_DIR" \
+        # --use_pose_rope \
         
         
     echo ">>> Experiment Finished. Results in $EXP_DIR"

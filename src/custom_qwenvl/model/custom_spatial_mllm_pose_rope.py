@@ -106,12 +106,18 @@ def forward_with_pose_rope(
                 )
 
             spatial_embeds_list, patch_start_idx = self.spatial_encoder(image_tchw)
-            fused_embeds,_, _ = self.connector(
-                image_embeds=image_embeds,
-                spatial_embeds_list=spatial_embeds_list,
-                patch_start_idx=patch_start_idx,
-                grid_thw=image_grid_thw,
-            )
+
+            # JJ: Conditional fusion based on skip_connector flag
+            if self.skip_connector:
+                # Skip connector fusion, use visual embeddings only
+                fused_embeds = image_embeds
+            else:
+                fused_embeds,_, _ = self.connector(
+                    image_embeds=image_embeds,
+                    spatial_embeds_list=spatial_embeds_list,
+                    patch_start_idx=patch_start_idx,
+                    grid_thw=image_grid_thw,
+                )
 
             mask = input_ids == self.config.image_token_id
             mask_unsqueezed = mask.unsqueeze(-1)
@@ -200,13 +206,18 @@ def forward_with_pose_rope(
                 # Store for use in position_ids computation
                 self.selected_frames_poses = c2w_poses.detach()  # (S, 4, 4) in float32
 
-            # Connector fusion (UNCHANGED)
-            fused_embeds, _, _ = self.connector(
-                video_embeds=video_embeds,
-                spatial_embeds_list=spatial_embeds_list,
-                patch_start_idx=patch_start_idx,
-                grid_thw=video_grid_thw,
-            )
+            # JJ: Conditional fusion based on skip_connector flag
+            if self.skip_connector:
+                # Skip connector fusion, use visual embeddings only
+                fused_embeds = video_embeds
+            else:
+                # Connector fusion (UNCHANGED)
+                fused_embeds, _, _ = self.connector(
+                    video_embeds=video_embeds,
+                    spatial_embeds_list=spatial_embeds_list,
+                    patch_start_idx=patch_start_idx,
+                    grid_thw=video_grid_thw,
+                )
             
             # ========== DEBUG: Check fused embeddings ==========
             if ENABLE_POSE_ROPE_NAN_DEBUG:
@@ -343,7 +354,7 @@ def forward_with_pose_rope(
             self.rope_deltas = rope_deltas
 
             # ✏️ MODIFIED: Debug output adjusted for 4D support
-            if self.offline_debug or True:
+            if self.offline_debug:
                 print(f"*"*20)
                 print(f"Details During Prefill:")
                 print(f"video_grid_thw: {video_grid_thw}")
