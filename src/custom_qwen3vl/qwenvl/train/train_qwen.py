@@ -22,10 +22,11 @@ import transformers
 import sys
 from pathlib import Path
 
-project_root = Path(__file__).parent.parent.parent
+# JJ: project_root should point to Spatial-MLLM/ directory
+project_root = Path(__file__).parent.parent.parent.parent.parent
 sys.path.append(str(project_root))
 
-from trainer import replace_qwen2_vl_attention_class
+from src.custom_qwen3vl.qwenvl.train.trainer import replace_qwen2_vl_attention_class
 
 from transformers import (
     Qwen2VLForConditionalGeneration,
@@ -33,8 +34,13 @@ from transformers import (
     Qwen3VLForConditionalGeneration,
     Qwen3VLMoeForConditionalGeneration
 )
-from qwenvl.data.data_processor import make_supervised_data_module
-from qwenvl.train.argument import (
+# JJ: Import Spatial-MLLM Qwen3 model
+from src.custom_qwen3vl.model.spatial_mllm_qwen3 import (
+    SpatialMLLMQwen3Config,
+    SpatialMLLMQwen3ForConditionalGeneration,
+)
+from src.custom_qwen3vl.qwenvl.data.data_processor import make_supervised_data_module
+from src.custom_qwen3vl.qwenvl.train.argument import (
     ModelArguments,
     DataArguments,
     TrainingArguments,
@@ -65,28 +71,136 @@ def safe_save_model_for_hf_trainer(trainer: transformers.Trainer, output_dir: st
 
 
 def set_model(model_args, model):
+    """
+    Set trainable parameters for the model.
+    
+    Note: Qwen3VL structure difference from Qwen2VL:
+        Qwen2VL/2.5VL:
+            - model.visual (direct attribute)
+            - model.model (language model)
+        Qwen3VL:
+            - model.model.visual (nested in Qwen3VLModel)
+            - model.model.language_model (nested in Qwen3VLModel)
+    """
+    # JJ: For Qwen3VL and Spatial-MLLM-Qwen3, vision encoder is at model.model.visual
     if model_args.tune_mm_vision:
-        for n, p in model.visual.named_parameters():
+        for n, p in model.model.visual.named_parameters():
             p.requires_grad = True
     else:
-        for n, p in model.visual.named_parameters():
+        for n, p in model.model.visual.named_parameters():
             p.requires_grad = False
 
     if model_args.tune_mm_mlp:
-        for n, p in model.visual.merger.named_parameters():
+        for n, p in model.model.visual.merger.named_parameters():
             p.requires_grad = True
     else:
-        for n, p in model.visual.merger.named_parameters():
+        for n, p in model.model.visual.merger.named_parameters():
             p.requires_grad = False
 
     if model_args.tune_mm_llm:
-        for n, p in model.language_model.named_parameters():
+        for n, p in model.model.language_model.named_parameters():
             p.requires_grad = True
         model.lm_head.requires_grad = True
     else:
-        for n, p in model.language_model.named_parameters():
+        for n, p in model.model.language_model.named_parameters():
             p.requires_grad = False
         model.lm_head.requires_grad = False
+
+    # JJ: Handle spatial_encoder if present (for Spatial-MLLM-Qwen3)
+    if hasattr(model, "spatial_encoder"):
+        if model_args.tune_mm_spatial_encoder:
+            for n, p in model.spatial_encoder.named_parameters():
+                p.requires_grad = True
+        else:
+            for n, p in model.spatial_encoder.named_parameters():
+                p.requires_grad = False
+
+
+def get_model(model_args, data_args, training_args, attn_implementation="flash_attention_2"):
+    """
+    Load model based on model_type.
+    Returns: (model, image_processor)
+    """
+    # JJ: Spatial-MLLM Qwen3 with VGGT for Pose Estimation (no connector)
+    if hasattr(model_args, "model_type") and model_args.model_type == "spatial-mllm-qwen3":
+        spatial_mllm_config = SpatialMLLMQwen3Config.from_pretrained(
+            model_args.pretrained_model_name_or_path,
+            spatial_config={
+                "img_size": 518,
+                "patch_size": 14,
+                "embed_dim": 1024,
+            },
+        )
+        model = SpatialMLLMQwen3ForConditionalGeneration.from_pretrained(
+            model_args.pretrained_model_name_or_path,
+            config=spatial_mllm_config,
+            cache_dir=training_args.cache_dir,
+            attn_implementation=attn_implementation,
+            torch_dtype=(torch.bfloat16 if training_args.bf16 else None),
+        )
+        
+        # Initialize VGGT spatial encoder
+        model.init_spatial_encoder()
+        
+        # Load VGGT pretrained weights
+        if hasattr(model_args, "vggt_checkpoints_path") and model_args.vggt_checkpoints_path:
+            model.spatial_encoder.load_pretrained_weights(model_args.vggt_checkpoints_path)
+            device = next(model.parameters()).device
+            dtype = next(model.parameters()).dtype
+            model.spatial_encoder.to(device=device, dtype=dtype)
+            rank0_print(f"✅ Loaded VGGT weights from {model_args.vggt_checkpoints_path}")
+        
+        # Use Qwen3 AutoProcessor
+        image_processor = AutoProcessor.from_pretrained(
+            model_args.pretrained_model_name_or_path,
+            use_fast=True,
+        ).image_processor
+    elif "qwen3" in model_args.pretrained_model_name_or_path.lower() and "a" in Path(model_args.pretrained_model_name_or_path.rstrip("/")).name.lower():
+        model = Qwen3VLMoeForConditionalGeneration.from_pretrained(
+            model_args.pretrained_model_name_or_path,
+            cache_dir=training_args.cache_dir,
+            attn_implementation=attn_implementation,
+            torch_dtype=(torch.bfloat16 if training_args.bf16 else None),
+        )
+        image_processor = AutoProcessor.from_pretrained(
+            model_args.pretrained_model_name_or_path,
+            use_fast=True,
+        ).image_processor
+    elif "qwen3" in model_args.pretrained_model_name_or_path.lower():
+        model = Qwen3VLForConditionalGeneration.from_pretrained(
+            model_args.pretrained_model_name_or_path,
+            cache_dir=training_args.cache_dir,
+            attn_implementation=attn_implementation,
+            torch_dtype=(torch.bfloat16 if training_args.bf16 else None),
+        )
+        image_processor = AutoProcessor.from_pretrained(
+            model_args.pretrained_model_name_or_path,
+            use_fast=True,
+        ).image_processor
+    elif "qwen2.5" in model_args.pretrained_model_name_or_path.lower():
+        model = Qwen2_5_VLForConditionalGeneration.from_pretrained(
+            model_args.pretrained_model_name_or_path,
+            cache_dir=training_args.cache_dir,
+            attn_implementation=attn_implementation,
+            torch_dtype=(torch.bfloat16 if training_args.bf16 else None),
+        )
+        image_processor = AutoProcessor.from_pretrained(
+            model_args.pretrained_model_name_or_path,
+            use_fast=True,
+        ).image_processor
+    else:
+        model = Qwen2VLForConditionalGeneration.from_pretrained(
+            model_args.pretrained_model_name_or_path,
+            cache_dir=training_args.cache_dir,
+            attn_implementation=attn_implementation,
+            torch_dtype=(torch.bfloat16 if training_args.bf16 else None),
+        )
+        image_processor = AutoProcessor.from_pretrained(
+            model_args.pretrained_model_name_or_path,
+            use_fast=True,
+        ).image_processor
+    
+    return model, image_processor
 
 
 def train(attn_implementation="flash_attention_2"):
@@ -100,46 +214,60 @@ def train(attn_implementation="flash_attention_2"):
     local_rank = training_args.local_rank
     os.makedirs(training_args.output_dir, exist_ok=True)
 
-    if "qwen3" in model_args.model_name_or_path.lower() and "a" in Path(model_args.model_name_or_path.rstrip("/")).name.lower():
-        model = Qwen3VLMoeForConditionalGeneration.from_pretrained(
-            model_args.model_name_or_path,
-            cache_dir=training_args.cache_dir,
-            attn_implementation=attn_implementation,
-            dtype=(torch.bfloat16 if training_args.bf16 else None),
-        )
-        data_args.model_type = "qwen3vl"
-    elif "qwen3" in model_args.model_name_or_path.lower():
-        model = Qwen3VLForConditionalGeneration.from_pretrained(
-            model_args.model_name_or_path,
-            cache_dir=training_args.cache_dir,
-            attn_implementation=attn_implementation,
-            dtype=(torch.bfloat16 if training_args.bf16 else None),
-        )
-        data_args.model_type = "qwen3vl"
-    elif "qwen2.5" in model_args.model_name_or_path.lower():
-        model = Qwen2_5_VLForConditionalGeneration.from_pretrained(
-            model_args.model_name_or_path,
-            cache_dir=training_args.cache_dir,
-            attn_implementation=attn_implementation,
-            dtype=(torch.bfloat16 if training_args.bf16 else None),
-        )
-        data_args.model_type = "qwen2.5vl"
-    else:
-        model = Qwen2VLForConditionalGeneration.from_pretrained(
-            model_args.model_name_or_path,
-            cache_dir=training_args.cache_dir,
-            attn_implementation=attn_implementation,
-            dtype=(torch.bfloat16 if training_args.bf16 else None),
-        )
-        data_args.model_type = "qwen2vl"
-
-    print(f'the initlized model is {model_args.model_name_or_path} the class is {model.__class__.__name__}')
-    processor = AutoProcessor.from_pretrained(
-        model_args.model_name_or_path,
+    # JJ: Load model using get_model()
+    model, image_processor = get_model(
+        model_args=model_args,
+        data_args=data_args,
+        training_args=training_args,
+        attn_implementation=attn_implementation,
     )
+    data_args.image_processor = image_processor
+    data_args.model_type = model_args.model_type if hasattr(model_args, "model_type") else "qwen3vl"
 
-    if data_args.data_flatten or data_args.data_packing:
-        replace_qwen2_vl_attention_class()
+    print(f'the initlized model is {model_args.pretrained_model_name_or_path} the class is {model.__class__.__name__}')
+    
+    # JJ: Apply Pose RoPE monkey patch for spatial-mllm-qwen3
+    if hasattr(model_args, "model_type") and model_args.model_type == "spatial-mllm-qwen3":
+        if hasattr(model_args, "use_pose_rope") and model_args.use_pose_rope:
+            from src.custom_qwen3vl.model.spatial_mllm_qwen3_pose_rope import patch_qwen3_with_pose_rope
+            
+            # Print user-level configuration before patching
+            print(f"[Training] 🔧 Applying Qwen3 Pose RoPE configuration:")
+            print(f"[Training]    - pose_enc_type: {model_args.pose_enc_type}")
+            print(f"[Training]    - mrope_section: {model_args.mrope_section if model_args.mrope_section else 'default (will be determined by pose_enc_type)'}")
+            
+            model = patch_qwen3_with_pose_rope(
+                model,
+                use_pose_rope=True,
+                pose_enc_type=model_args.pose_enc_type,
+                mrope_section=model_args.mrope_section,
+            )
+            
+            # Dynamic message based on actual pose_enc_type
+            if model_args.pose_enc_type == "PHW":
+                dims_desc = "3D Pose-aware RoPE (P+H+W for Qwen3)"
+            elif model_args.pose_enc_type == "THW":
+                dims_desc = "3D standard mRoPE (T+H+W, original Qwen3)"
+            else:
+                dims_desc = f"RoPE with pose_enc_type={model_args.pose_enc_type}"
+            
+            print(f"[Training] ✅ Qwen3 Monkey patch applied: Model now uses {dims_desc}")
+            
+            # Save Pose RoPE config to model.config for checkpoint persistence
+            if not hasattr(model.config, 'pose_rope_config'):
+                model.config.pose_rope_config = {}
+            model.config.pose_rope_config['use_pose_rope'] = True
+            model.config.pose_rope_config['pose_enc_type'] = model_args.pose_enc_type
+            model.config.pose_rope_config['mrope_section'] = model.config.text_config.rope_parameters.get("mrope_section", [24, 20, 20])
+            print(f"[Training] 💾 Saved Pose RoPE config to model.config for checkpoint persistence")
+        else:
+            print(f"[Training] ℹ️  Using Qwen3 standard 3D mRoPE (T+H+W)")
+            if not hasattr(model.config, 'pose_rope_config'):
+                model.config.pose_rope_config = {}
+            model.config.pose_rope_config['use_pose_rope'] = False
+            model.config.pose_rope_config['pose_enc_type'] = None
+            model.config.pose_rope_config['mrope_section'] = model.config.text_config.rope_parameters.get("mrope_section", [24, 20, 20])
+
     model.config.use_cache = False
 
     if training_args.gradient_checkpointing:
@@ -152,8 +280,15 @@ def train(attn_implementation="flash_attention_2"):
 
             model.get_input_embeddings().register_forward_hook(make_inputs_require_grad)
 
+    processor = AutoProcessor.from_pretrained(
+        model_args.pretrained_model_name_or_path,
+    )
+
+    if data_args.data_flatten or data_args.data_packing:
+        replace_qwen2_vl_attention_class()
+
     tokenizer = transformers.AutoTokenizer.from_pretrained(
-        model_args.model_name_or_path,
+        model_args.pretrained_model_name_or_path,
         cache_dir=training_args.cache_dir,
         model_max_length=training_args.model_max_length,
         padding_side="right",
@@ -180,8 +315,12 @@ def train(attn_implementation="flash_attention_2"):
         set_model(model_args, model)
 
         if torch.distributed.get_rank() == 0:
-            model.visual.print_trainable_parameters()
+            # JJ: Print trainable parameters
+            # Note: Qwen3VL structure is model.model (Qwen3VLModel) which contains visual and language_model
+            model.model.visual.print_trainable_parameters()
             model.model.print_trainable_parameters()
+            if hasattr(model, "spatial_encoder"):
+                print(f"spatial_encoder trainable params: {sum(p.numel() for p in model.spatial_encoder.parameters() if p.requires_grad)}")
     
     data_module = make_supervised_data_module(processor, data_args=data_args)
     trainer = Trainer(

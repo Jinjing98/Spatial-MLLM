@@ -258,6 +258,11 @@ class SpatialMLLMQwen3ForConditionalGeneration(Qwen3VLForConditionalGeneration):
             self.selected_frames_poses = c2w_poses.detach()  # (S, 4, 4) in float32
             self.current_video_grid_thw = video_grid_thw
             
+            # JJ: Force print for debugging (remove after verification)
+            print(f"🎯 [Pose Estimation] Extracted {S} camera poses (c2w format)")
+            print(f"🎯 [Pose Estimation] video_tchw[0].shape = {video_tchw[0].shape}")
+            print(f"🎯 [Pose Estimation] Stored in self.selected_frames_poses for Monkey Patch")
+            
             if self.offline_debug:
                 print(f"[Pose Estimation] Extracted {S} camera poses (c2w format)")
                 print(f"[Pose Estimation] Stored in self.selected_frames_poses for Monkey Patch")
@@ -275,10 +280,27 @@ class SpatialMLLMQwen3ForConditionalGeneration(Qwen3VLForConditionalGeneration):
             # For images, no temporal downsampling needed
             self.selected_frames_poses = self.extrinsics_w2c
         
+        # ==================== Handle Pose RoPE Position IDs ====================
+        # JJ: CRITICAL - If Pose RoPE is enabled, we MUST set position_ids to None
+        # to force dynamic computation in Qwen3VLModel.forward() using our monkey-patched get_rope_index.
+        # 
+        # Why: During training, Dataset pre-computes position_ids using get_rope_index_3 (without pose).
+        # If we pass these pre-computed position_ids to model.forward(), Qwen3VLModel.forward() will
+        # skip calling self.get_rope_index(), and our Pose RoPE monkey patch will never be triggered.
+        
+        pose_rope_config = getattr(self.config, 'pose_rope_config', None)
+        use_pose_rope = pose_rope_config.get('use_pose_rope', False) if pose_rope_config else False
+        
+        if use_pose_rope and position_ids is not None:
+            if True:  # Always print warning for visibility
+                print(f"⚠️  [Pose RoPE] Discarding pre-computed position_ids to enable Pose-aware RoPE computation")
+                print(f"⚠️  [Pose RoPE] Model will dynamically compute position_ids using monkey-patched get_rope_index")
+            position_ids = None  # Force dynamic computation
+        
         # ==================== Call Parent Forward ====================
         # JJ: Let Qwen3 handle everything:
         #     - Vision encoding (including Deepstack)
-        #     - Position IDs computation (will use our monkey-patched get_rope_index)
+        #     - Position IDs computation (will use our monkey-patched get_rope_index if position_ids is None)
         #     - Language modeling
         #     - Loss computation
         

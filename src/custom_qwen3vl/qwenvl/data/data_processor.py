@@ -137,7 +137,7 @@ def update_processor_pixels(processor, data_args):
     return processor
 
 
-def _build_messages(item: Dict[str, Any], base_path: Path) -> List[Dict[str, Any]]:
+def _build_messages(item: Dict[str, Any], base_path: Path, video_nframes: int = None, video_fps: float = None) -> List[Dict[str, Any]]:
     # Extract and normalize images and videos
     images = item.get("image") or []
     if isinstance(images, str):
@@ -147,13 +147,28 @@ def _build_messages(item: Dict[str, Any], base_path: Path) -> List[Dict[str, Any
     if isinstance(videos, str):
         videos = [videos]
 
+    # JJ: Handle optional video_root and image_root for dataset-independent path handling
+    video_root = Path(item.get("video_root", base_path))
+    image_root = Path(item.get("image_root", base_path))
+
     # Build media pools with absolute paths
     image_pool = [
-        {"type": "image", "image": _make_abs_paths(base_path, img)} for img in images
+        {"type": "image", "image": str((image_root / img).resolve())} for img in images
     ]
-    video_pool = [
-        {"type": "video", "video": _make_abs_paths(base_path, vid)} for vid in videos
-    ]
+    
+    # JJ: Add nframes/fps parameters to video content for fetch_video control
+    video_pool = []
+    for vid in videos:
+        video_content = {
+            "type": "video", 
+            "video": str((video_root / vid).resolve())
+        }
+        # Add nframes or fps if provided (for fixed frame count control)
+        if video_nframes is not None:
+            video_content["nframes"] = video_nframes
+        elif video_fps is not None:
+            video_content["fps"] = video_fps
+        video_pool.append(video_content)
 
     messages = []
     for turn in item["conversations"]:
@@ -202,17 +217,77 @@ def _build_messages(item: Dict[str, Any], base_path: Path) -> List[Dict[str, Any
 def preprocess_qwen_visual(
     sources,
     processor,
+    video_nframes: int = None,
+    video_fps: float = None,
 ) -> Dict:
     if len(sources) != 1:
         raise ValueError(f"Expected 1 source, got {len(sources)}")
 
     source = sources[0]
     base_path = Path(source.get("data_path", ""))
-    messages = _build_messages(source, base_path)
+    messages = _build_messages(source, base_path, video_nframes=video_nframes, video_fps=video_fps)
 
-    full_result = processor.apply_chat_template(
-        messages, tokenize=True, return_dict=True, return_tensors="pt"
+    # JJ: Use Qwen3 official method to get video_tchw (consistent with inference)
+    # Step 1: Extract vision_infos from messages
+    from qwen_vl_utils import extract_vision_info, fetch_video, fetch_image
+    
+    vision_infos = extract_vision_info(messages)
+    
+    image_inputs = []
+    video_inputs = []
+    videos_metadata = []
+    
+    # Step 2: Manually fetch video/image frames (same as gen_videos_metadata in inference)
+    for vision_info in vision_infos:
+        if "image" in vision_info or "image_url" in vision_info:
+            image_inputs.append(fetch_image(vision_info))
+        elif "video" in vision_info:
+            (video, raw_meta), _sample_fps = fetch_video(
+                vision_info, 
+                return_video_sample_fps=True, 
+                return_video_metadata=True
+            )
+            video_inputs.append(video)  # Tensor (T, C, H, W), uint8 [0, 255]
+            videos_metadata.append({
+                "fps": raw_meta.get("fps"),
+                "total_num_frames": raw_meta.get("total_num_frames"),
+                "frames_indices": raw_meta.get("frames_indices"),
+            })
+    
+    # Step 3: Call processor to get tokenized batch
+    prompts_text = processor.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
+    full_result = processor(
+        text=[prompts_text],
+        images=image_inputs if image_inputs else None,
+        videos=video_inputs if video_inputs else None,
+        video_metadata=videos_metadata if videos_metadata else None,
+        do_sample_frames=False,  # Already sampled by fetch_video
+        return_tensors="pt",
     )
+    
+    # Step 4: Manually convert video_inputs to video_tchw (same as prepare_spatial_mllm_inputs)
+    video_tchw = []
+    for video_input in video_inputs:
+        if isinstance(video_input, torch.Tensor):
+            video_input = video_input.float() / 255.0  # Normalize to [0, 1]
+        video_tchw.append(video_input)
+    
+    image_tchw = []
+    for image_input in image_inputs:
+        from PIL import Image
+        if isinstance(image_input, Image.Image):
+            image_input = torch.tensor(np.array(image_input)).permute(2, 0, 1).float() / 255.0
+        image_tchw.append(image_input)
+    
+    full_result["video_tchw"] = video_tchw if video_tchw else None
+    full_result["image_tchw"] = image_tchw if image_tchw else None
+    
+    # JJ: Debug print to verify video_tchw is correctly obtained
+    if video_tchw:
+        rank0_print(f"[preprocess_qwen_visual] ✅ video_tchw obtained: {len(video_tchw)} videos")
+        rank0_print(f"[preprocess_qwen_visual]    video_tchw[0].shape = {video_tchw[0].shape}")
+    else:
+        rank0_print(f"[preprocess_qwen_visual] ⚠️ video_tchw is empty")
 
     input_ids = full_result["input_ids"]
     if isinstance(input_ids, list):
@@ -238,6 +313,7 @@ def preprocess_qwen_visual(
 
     full_result["labels"] = labels
     full_result["input_ids"] = input_ids
+    
     return full_result
 
 
@@ -257,7 +333,7 @@ class LazySupervisedDataset(Dataset):
             data_args, "video_min_total_pixels", 256 * 28 * 28
         )
         self.model_type = data_args.model_type
-        if data_args.model_type == "qwen3vl":
+        if data_args.model_type in ["qwen3vl", "spatial-mllm-qwen3"]:
             self.get_rope_index = get_rope_index_3
         elif data_args.model_type == "qwen2.5vl":
             self.get_rope_index = get_rope_index_25
@@ -286,8 +362,27 @@ class LazySupervisedDataset(Dataset):
                 if isinstance(ann, list):
                     for sub_ann in ann:
                         sub_ann["data_path"] = data["data_path"]
+                        # JJ: Pass optional video_root and image_root for dataset-independent path handling
+                        if "video_root" in data:
+                            sub_ann["video_root"] = data["video_root"]
+                        if "image_root" in data:
+                            sub_ann["image_root"] = data["image_root"]
                 else:
                     ann["data_path"] = data["data_path"]
+                    # JJ: Pass optional video_root and image_root
+                    if "video_root" in data:
+                        ann["video_root"] = data["video_root"]
+                    if "image_root" in data:
+                        ann["image_root"] = data["image_root"]
+                    
+                    # JJ: ViCA-322K specific fix - remap <image> to <video> for video data
+                    # ViCA uses <image> tag in conversations but has "video" field
+                    if "video" in ann and "conversations" in ann:
+                        for conv in ann["conversations"]:
+                            if "value" in conv and "<image>" in conv["value"]:
+                                conv["value"] = conv["value"].replace("<image>", "<video>")
+                            elif "content" in conv and "<image>" in conv["content"]:
+                                conv["content"] = conv["content"].replace("<image>", "<video>")
             list_data_dict += annotations
 
         rank0_print(f"Total training samples: {len(list_data_dict)}")
@@ -387,9 +482,15 @@ class LazySupervisedDataset(Dataset):
             raise e
 
     def _get_item(self, sources) -> Dict[str, torch.Tensor]:
+        # JJ: Get video parameters from data_args
+        video_nframes = getattr(self.data_args, "video_max_frames", None)
+        video_fps = getattr(self.data_args, "video_frame_fps", None)
+        
         data_dict = preprocess_qwen_visual(
             sources,
             self.processor,
+            video_nframes=video_nframes,
+            video_fps=video_fps,
         )
 
         seq_len = data_dict["input_ids"][0].size(0)
@@ -598,6 +699,29 @@ class DataCollatorForSupervisedDataset(object):
         batch["pixel_values_videos"] = concat_videos
         batch["video_grid_thw"] = video_grid_thw
         batch["position_ids"] = position_ids
+        
+        # JJ: Collect TCHW for Spatial-MLLM VGGT pose estimation
+        # Note: instance["video_tchw"] is already a list from preprocess_qwen_visual
+        # So we need to flatten the list of lists
+        image_tchw_list = []
+        for instance in instances:
+            if "image_tchw" in instance and instance["image_tchw"] is not None:
+                if isinstance(instance["image_tchw"], list):
+                    image_tchw_list.extend(instance["image_tchw"])  # Flatten list of lists
+                else:
+                    image_tchw_list.append(instance["image_tchw"])  # Single tensor
+        
+        video_tchw_list = []
+        for instance in instances:
+            if "video_tchw" in instance and instance["video_tchw"] is not None:
+                if isinstance(instance["video_tchw"], list):
+                    video_tchw_list.extend(instance["video_tchw"])  # Flatten list of lists
+                else:
+                    video_tchw_list.append(instance["video_tchw"])  # Single tensor
+        
+        batch["image_tchw"] = image_tchw_list if len(image_tchw_list) > 0 else None
+        batch["video_tchw"] = video_tchw_list if len(video_tchw_list) > 0 else None
+        
         return batch
 
 
@@ -671,6 +795,28 @@ class FlattenedDataCollatorForSupervisedDataset(DataCollatorForSupervisedDataset
         batch["image_grid_thw"] = grid_thw
         batch["pixel_values_videos"] = concat_videos
         batch["video_grid_thw"] = video_grid_thw
+
+        # JJ: Collect TCHW for Spatial-MLLM VGGT pose estimation
+        # Note: instance["video_tchw"] is already a list from preprocess_qwen_visual
+        # So we need to flatten the list of lists
+        image_tchw_list = []
+        for instance in instances:
+            if "image_tchw" in instance and instance["image_tchw"] is not None:
+                if isinstance(instance["image_tchw"], list):
+                    image_tchw_list.extend(instance["image_tchw"])  # Flatten list of lists
+                else:
+                    image_tchw_list.append(instance["image_tchw"])  # Single tensor
+        
+        video_tchw_list = []
+        for instance in instances:
+            if "video_tchw" in instance and instance["video_tchw"] is not None:
+                if isinstance(instance["video_tchw"], list):
+                    video_tchw_list.extend(instance["video_tchw"])  # Flatten list of lists
+                else:
+                    video_tchw_list.append(instance["video_tchw"])  # Single tensor
+        
+        batch["image_tchw"] = image_tchw_list if len(image_tchw_list) > 0 else None
+        batch["video_tchw"] = video_tchw_list if len(video_tchw_list) > 0 else None
 
         return batch
 

@@ -5,10 +5,21 @@ from typing import Dict, Optional, Sequence, List
 
 @dataclass
 class ModelArguments:
-    model_name_or_path: Optional[str] = field(default="Qwen/Qwen2.5-VL-3B-Instruct")
+    # JJ: Keep parameter name consistent with original project
+    pretrained_model_name_or_path: Optional[str] = field(default="Qwen/Qwen3-VL-2B-Instruct")
+    model_name_or_path: Optional[str] = field(default=None)  # JJ: Alias for compatibility
+    model_type: str = field(default="spatial-mllm-qwen3")  # JJ: Explicit model type
+    vggt_checkpoints_path: Optional[str] = field(default="checkpoints/VGGT-1B/model.safetensors")
+    
     tune_mm_llm: bool = field(default=False)
-    tune_mm_mlp: bool = field(default=False)
+    tune_mm_mlp: bool = field(default=False)  # JJ: Keep for Qwen3 compatibility
     tune_mm_vision: bool = field(default=False)
+    tune_mm_spatial_encoder: bool = field(default=False)  # JJ: For VGGT training
+    
+    # JJ: Pose RoPE configuration
+    use_pose_rope: bool = field(default=False, metadata={"help": "Enable Pose-aware RoPE (PHW) for Qwen3"})
+    pose_enc_type: str = field(default="PHW", metadata={"help": "Pose encoding type ('PHW' for Qwen3, or 'THW' for original)"})
+    mrope_section: Optional[List[int]] = field(default=None, metadata={"help": "Custom mrope_section (e.g., [24, 20, 20] for Qwen3)"})
 
 @dataclass
 class DataArguments:
@@ -23,6 +34,10 @@ class DataArguments:
     video_max_pixels: int = field(default=1024 * 28 * 28)
     video_min_pixels: int = field(default=256 * 28 * 28)
     video_fps: float = 2
+    # JJ: Additional video processing parameters for Spatial-MLLM
+    video_max_frame_pixels: int = field(default=32 * 28 * 28)
+    video_min_frame_pixels: int = field(default=4 * 28 * 28)
+    video_frame_fps: Optional[int] = field(default=None)
 
 
 @dataclass
