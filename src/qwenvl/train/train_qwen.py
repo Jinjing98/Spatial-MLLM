@@ -254,15 +254,50 @@ def train(attn_implementation="flash_attention_2"):
     # 🆕 NEW: Apply Pose RoPE monkey patch for custom-spatial-mllm
     if "custom-spatial-mllm" in model_args.model_type.lower() and model_args.use_pose_rope:
         from src.custom_qwenvl.model.custom_spatial_mllm_pose_rope import patch_model_with_pose_rope
+        
+        # Print user-level configuration before patching
+        print(f"[Training] 🔧 Applying Pose RoPE configuration:")
+        print(f"[Training]    - pose_enc_type: {model_args.pose_enc_type}")
+        print(f"[Training]    - mrope_section: {model_args.mrope_section if model_args.mrope_section else 'default (will be determined by pose_enc_type)'}")
+        
         model = patch_model_with_pose_rope(
             model,
             use_pose_rope=True,
             pose_enc_type=model_args.pose_enc_type,
+            mrope_section=model_args.mrope_section,  # 🆕 NEW: Pass custom mrope_section if provided
             # Note: All Temporal & Pose parameters are inherited from model.__init__
         )
-        print(f"[Training] ✅ Monkey patch applied: Model now uses 4D Pose-aware RoPE (P+T+H+W)")
+        
+        # Dynamic message based on actual pose_enc_type
+        if model_args.pose_enc_type == "PTHW":
+            dims_desc = "4D Pose-aware RoPE (P+T+H+W)"
+        elif model_args.pose_enc_type == "PHW":
+            dims_desc = "3D Pose-aware RoPE (P+H+W, ignore temporal)"
+        elif model_args.pose_enc_type == "THW":
+            dims_desc = "3D standard mRoPE (T+H+W, ignore pose)"
+        else:
+            dims_desc = f"RoPE with pose_enc_type={model_args.pose_enc_type}"
+        
+        print(f"[Training] ✅ Monkey patch applied: Model now uses {dims_desc}")
+        
+        # 🆕 NEW: Save Pose RoPE config to model.config for checkpoint persistence
+        if not hasattr(model.config, 'pose_rope_config'):
+            model.config.pose_rope_config = {}
+        model.config.pose_rope_config['use_pose_rope'] = True
+        model.config.pose_rope_config['pose_enc_type'] = model_args.pose_enc_type
+        model.config.pose_rope_config['mrope_section'] = model.config.rope_scaling["mrope_section"]
+        print(f"[Training] 💾 Saved Pose RoPE config to model.config for checkpoint persistence")
+        print(f"[Training]    - use_pose_rope: {model.config.pose_rope_config['use_pose_rope']}")
+        print(f"[Training]    - pose_enc_type: {model.config.pose_rope_config['pose_enc_type']}")
+        print(f"[Training]    - mrope_section: {model.config.pose_rope_config['mrope_section']}")
     elif "custom-spatial-mllm" in model_args.model_type.lower() and not model_args.use_pose_rope:
         print(f"[Training] ℹ️  Using standard 3D mRoPE (T+H+W)")
+        # 🆕 NEW: Save config even when not using Pose RoPE
+        if not hasattr(model.config, 'pose_rope_config'):
+            model.config.pose_rope_config = {}
+        model.config.pose_rope_config['use_pose_rope'] = False
+        model.config.pose_rope_config['pose_enc_type'] = None
+        model.config.pose_rope_config['mrope_section'] = model.config.rope_scaling.get("mrope_section", [16, 24, 24])
 
     model.config.use_cache = False
 

@@ -18,7 +18,8 @@ class ModelArguments:
     
     # JJ: 4D Pose RoPE config
     use_pose_rope: bool = field(default=False, metadata={"help": "Enable 4D Pose-aware RoPE (P+T+H+W) instead of 3D mRoPE (T+H+W)"})
-    pose_enc_type: str = field(default="PTHW", metadata={"help": "Pose encoding type (only 'PTHW' supported now)"})
+    pose_enc_type: str = field(default="PTHW", metadata={"help": "Pose encoding type ('PTHW', 'PHW', or 'THW')"})
+    mrope_section: Optional[List[int]] = field(default=None, metadata={"help": "Custom mrope_section (e.g., [16, 24, 24] for 3D or [8, 8, 24, 24] for 4D)"})
 
 @dataclass
 class DataArguments:

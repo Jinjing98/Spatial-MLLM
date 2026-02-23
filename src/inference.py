@@ -3,6 +3,7 @@ import os
 import sys
 import time
 from pathlib import Path
+from typing import List, Optional
 
 import numpy as np
 import torch
@@ -35,13 +36,14 @@ def main(
     use_geo: bool | None = None,  # JJ: Use geo embeddings (None for model default)
     # 🆕 NEW: 4D Pose RoPE control flag
     use_pose_rope: bool = False,  # JJ: Enable 4D Pose-aware RoPE (P+T+H+W) instead of 3D mRoPE (T+H+W)
-    pose_enc_type: str = "PTHW",  # JJ: Pose encoding type (only 'PTHW' supported now)
+    pose_enc_type: str = "PTHW",  # JJ: Pose encoding type ('PTHW', 'PHW', or 'THW')
+    mrope_section: Optional[List[int]] = None,  # JJ: Custom mrope_section (e.g., [16, 24, 24] for 3D or [8, 8, 24, 24] for 4D)
     # NOTE: All Pose/Temporal parameters are defined in model.__init__ (custom_spatial_mllm.py)
 ):
     print(f"[Inference] model_type={model_type}, mp4_nframes={mp4_nframes}, sample_fps={sample_fps}")
     # 🆕 NEW: Print 4D Pose RoPE status
     if use_pose_rope:
-        print(f"[Inference] 🆕 4D Pose RoPE ENABLED: pose_enc_type={pose_enc_type}")
+        print(f"[Inference] 🆕 4D Pose RoPE ENABLED: pose_enc_type={pose_enc_type}, mrope_section={mrope_section}")
         print(f"[Inference] 📌 All Pose/Temporal parameters are defined in model.__init__ (see custom_spatial_mllm.py)")
     torch.cuda.empty_cache()
 
@@ -52,14 +54,53 @@ def main(
     # 🆕 NEW: Apply Pose RoPE monkey patch for custom-spatial-mllm
     if model_type == "custom-spatial-mllm" and use_pose_rope:
         from src.custom_qwenvl.model.custom_spatial_mllm_pose_rope import patch_model_with_pose_rope
+        
+        # 🆕 NEW: Validate config consistency if model was trained with Pose RoPE
+        if hasattr(model.config, 'pose_rope_config'):
+            saved_config = model.config.pose_rope_config
+            print(f"[Inference] 📋 Detected saved Pose RoPE config in checkpoint:")
+            print(f"[Inference]    - use_pose_rope: {saved_config.get('use_pose_rope')}")
+            print(f"[Inference]    - pose_enc_type: {saved_config.get('pose_enc_type')}")
+            print(f"[Inference]    - mrope_section: {saved_config.get('mrope_section')}")
+            
+            # Warn if mismatch
+            if not saved_config.get('use_pose_rope', False):
+                print(f"[Inference] ⚠️  WARNING: Checkpoint was trained WITHOUT Pose RoPE, but you're enabling it now!")
+                print(f"[Inference]    This may cause unexpected behavior. Consider using --use_pose_rope=False")
+            
+            if saved_config.get('pose_enc_type') != pose_enc_type:
+                print(f"[Inference] ⚠️  WARNING: pose_enc_type mismatch!")
+                print(f"[Inference]    Checkpoint: {saved_config.get('pose_enc_type')}")
+                print(f"[Inference]    Current: {pose_enc_type}")
+        
         model = patch_model_with_pose_rope(
             model, 
             use_pose_rope=True,
             pose_enc_type=pose_enc_type,
+            mrope_section=mrope_section,  # 🆕 NEW: Pass custom mrope_section if provided
             # Note: All Temporal & Pose parameters are inherited from model.__init__
         )
-        print(f"[Inference] ✅ Monkey patch applied: Model now uses 4D Pose-aware RoPE (P+T+H+W)")
+        
+        # Dynamic message based on actual pose_enc_type
+        if pose_enc_type == "PTHW":
+            dims_desc = "4D Pose-aware RoPE (P+T+H+W)"
+        elif pose_enc_type == "PHW":
+            dims_desc = "3D Pose-aware RoPE (P+H+W, ignore temporal)"
+        elif pose_enc_type == "THW":
+            dims_desc = "3D standard mRoPE (T+H+W, ignore pose)"
+        else:
+            raise ValueError(f"Invalid pose_enc_type: {pose_enc_type}")
+        
+        print(f"[Inference] ✅ Monkey patch applied: Model now uses {dims_desc}")
+        # Print final configuration after patching
+        actual_mrope_section = model.config.rope_scaling.get("mrope_section", "not found")
+        print(f"[Inference] 📊 Final mrope_section: {actual_mrope_section}")
     elif model_type == "custom-spatial-mllm" and not use_pose_rope:
+        # 🆕 NEW: Warn if checkpoint expects Pose RoPE but we're not using it
+        if hasattr(model.config, 'pose_rope_config') and model.config.pose_rope_config.get('use_pose_rope', False):
+            print(f"[Inference] ⚠️  WARNING: Checkpoint was trained WITH Pose RoPE, but you're NOT enabling it!")
+            print(f"[Inference]    Checkpoint config: {model.config.pose_rope_config}")
+            print(f"[Inference]    Consider using --use_pose_rope to match training configuration")
         print(f"[Inference] ℹ️  Using standard 3D mRoPE (T+H+W)")
 
 

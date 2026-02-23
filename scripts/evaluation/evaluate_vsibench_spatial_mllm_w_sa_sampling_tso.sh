@@ -177,9 +177,15 @@ for nframe in "${nframes[@]}"; do
         --batch_size 1 \
         --output_dir "$EXP_DIR" \
         --use_pose_rope \
+        --pose_enc_type "PTHW" \
+        --mrope_section 8 8 24 24 \
         --output_name "eval_result" \
         $EXTRA_ARGS \
         2>&1 | tee -a "$LOG_FILE"
         
+        # --use_pose_rope \
+        # --pose_enc_type "PTHW" \
+        # --mrope_section 8 8 24 24 \
+
     echo ">>> Experiment Finished. Results in $EXP_DIR"
 done
