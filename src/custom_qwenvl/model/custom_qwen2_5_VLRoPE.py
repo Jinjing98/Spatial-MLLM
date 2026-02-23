@@ -532,11 +532,11 @@ def custom_get_pose_rope_index(
     input_ids: Optional[torch.LongTensor] = None,
     image_grid_thw: Optional[torch.LongTensor] = None,
     video_grid_thw: Optional[torch.LongTensor] = None,
-    selected_frames_poses: Optional[torch.Tensor] = None,  # JJ: Camera poses (N, 4, 4)
+    selected_frames_poses: Optional[torch.Tensor] = None,  # JJ: Camera poses (N, 4, 4), required for PTHW/PHW, optional for THW
     selected_frames_id: Optional[List[int]] = None,  # JJ: Frame indices for mRoPE_readaptT
     second_per_grid_ts: Optional[torch.Tensor] = None,
     attention_mask: Optional[torch.Tensor] = None,
-    pose_enc_type: str = "PTHW",  # default PTHW
+    pose_enc_type: str = "PTHW",  # JJ: "PTHW" (4D), "PHW" (3D, ignore temporal), or "THW" (3D, ignore pose)
     temporal_patch_size: int = 2,
     # ==================== Pose Parameters ====================
     pose_scale_factor: float = 16.0,  # JJ: Renamed from global_normalize_scale_factor
@@ -553,15 +553,20 @@ def custom_get_pose_rope_index(
     temporal_readapted_scale_factor: float = 16.0,  # JJ: Renamed for consistency
 ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
     """
-    Compute 4D Pose-Temporal-Height-Width RoPE indices for vision+text sequence.
+    Compute Pose-aware RoPE indices for vision+text sequence.
 
-    Output shape: (4, batch_size, seq_len)
+    Supports three modes:
+        - PTHW (4D): Pose-Temporal-Height-Width (use both pose and temporal)
+        - PHW  (3D): Pose-Height-Width (ignore temporal dimension)
+        - THW  (3D): Temporal-Height-Width (ignore pose dimension, standard mRoPE)
+
+    Output shape: (num_dims, batch_size, seq_len) where num_dims = 4 for PTHW, 3 for PHW/THW
     Pose index is computed via compute_lie_scalar_index_torch.
 
     Args:
-        selected_frames_poses: (N, 4, 4) camera-to-world poses for Pose encoding
+        selected_frames_poses: (N, 4, 4) camera-to-world poses for Pose encoding (required for PTHW/PHW, optional for THW)
         selected_frames_id: List of frame indices for mRoPE_readaptT temporal adjustment
-        pose_enc_type: ['PTHW'], default PTHW (only PTHW implemented for now)
+        pose_enc_type: ['PTHW', 'PHW', 'THW'], default PTHW
         
         Pose Parameters:
             pose_scale_factor: scale factor for Pose normalization [0, scale_factor]
@@ -584,13 +589,28 @@ def custom_get_pose_rope_index(
         Others: follow original custom_get_rope_index API
 
     Returns:
-        position_ids: (4, batch_size, seq_len) - Pose dimension is float, THW dimensions are long
+        position_ids: (num_dims, batch_size, seq_len) - Pose dimension is float, (T)HW dimensions are long
         rope_deltas: (batch_size, 1)
         visual_token_mask: (batch_size, seq_len)
     """
     # ------------------ CHECK ------------------
-    if pose_enc_type != "PTHW":
-        raise NotImplementedError(f"pose_enc_type={pose_enc_type} not implemented. Only 'PTHW' is supported.")
+    if pose_enc_type not in ["PTHW", "PHW", "THW"]:
+        raise NotImplementedError(f"pose_enc_type={pose_enc_type} not implemented. Only 'PTHW', 'PHW', and 'THW' are supported.")
+    
+    # JJ: Validate selected_frames_poses requirement
+    if pose_enc_type in ["PTHW", "PHW"] and selected_frames_poses is None:
+        raise ValueError(f"selected_frames_poses is required for pose_enc_type='{pose_enc_type}'")
+    
+    # JJ: Determine dimension based on pose_enc_type
+    if pose_enc_type == "PTHW":
+        num_dims = 4  # Pose + Temporal + Height + Width
+    elif pose_enc_type == "PHW":
+        num_dims = 3  # Pose + Height + Width (ignore temporal)
+    elif pose_enc_type == "THW":
+        num_dims = 3  # Temporal + Height + Width (ignore pose, standard mRoPE)
+    else:
+        raise ValueError(f"Unknown pose_enc_type: {pose_enc_type}")
+    
     if THW_position_ids_compute_mode == 'mRoPE_readaptT':
         if temporal_patch_size != 2:
             raise NotImplementedError(
@@ -606,9 +626,10 @@ def custom_get_pose_rope_index(
     spatial_merge_size = config.vision_config.spatial_merge_size
 
     # ------------------ REUSE: initialize position_ids and mask ------------------
-    # JJ: Keep Pose dimension as float, THW dimensions as long
+    # JJ: Keep Pose dimension as float, (T)HW dimensions as long
+    # JJ: num_dims is dynamic: 4 for PTHW, 3 for PHW
     position_ids = torch.ones(
-        4, batch_size, seq_len, dtype=torch.float32, device=input_ids.device
+        num_dims, batch_size, seq_len, dtype=torch.float32, device=input_ids.device
     )
     visual_token_mask = torch.zeros(batch_size, seq_len, dtype=torch.long, device=input_ids.device)
     rope_deltas = []
@@ -616,87 +637,100 @@ def custom_get_pose_rope_index(
 
     # ------------------ EXTEND: Select anchor frame based on strategy ------------------
     # JJ: Determine which frame to use as reference for pose distance computation
-    if pose_anchor_rereference_strategy == 'first':
-        # Use first frame as anchor
-        ref_frame_idx = 0
-    elif pose_anchor_rereference_strategy == 'medoid':
-        # Use medoid frame as anchor (frame with minimum sum of distances to all others)
-        # NOTE: Uses pose_id_scalar_lambda_trans to ensure consistent distance metric
-        #       This affects: (1) which frame is selected as medoid
-        #                     (2) ensures P value ordering matches medoid selection criterion
-        N = selected_frames_poses.shape[0]
-        device = selected_frames_poses.device
+    # Skip for THW mode (no pose dimension)
+    if pose_enc_type == "PTHW" or pose_enc_type == "PHW":
+        if pose_anchor_rereference_strategy == 'first':
+            # Use first frame as anchor
+            ref_frame_idx = 0
+        elif pose_anchor_rereference_strategy == 'medoid':
+            # Use medoid frame as anchor (frame with minimum sum of distances to all others)
+            # NOTE: Uses pose_id_scalar_lambda_trans to ensure consistent distance metric
+            #       This affects: (1) which frame is selected as medoid
+            #                     (2) ensures P value ordering matches medoid selection criterion
+            N = selected_frames_poses.shape[0]
+            device = selected_frames_poses.device
+            
+            # Compute distance matrix: D[i,j] = distance between pose i and pose j
+            # Using same Lie scalar metric as compute_lie_scalar_index_torch
+            distance_matrix = torch.zeros(N, N, device=device)
+            for i in range(N):
+                for j in range(N):
+                    if i != j:
+                        # Compute relative pose: T_j_to_i = inv(T_i_to_w) @ T_j_to_w
+                        pose_i_w2c = torch.linalg.inv(selected_frames_poses[i])
+                        pose_rel = pose_i_w2c @ selected_frames_poses[j]
+                        
+                        # Compute Lie scalar distance (rotation angle + weighted translation)
+                        R_rel = pose_rel[:3, :3]
+                        t_rel = pose_rel[:3, 3]
+                        
+                        # Rotation angle from trace(R) = 1 + 2*cos(theta)
+                        trace = torch.diagonal(R_rel).sum()
+                        cos_theta = (trace - 1.0) / 2.0
+                        cos_theta = torch.clamp(cos_theta, -1.0, 1.0)
+                        theta = torch.acos(cos_theta)
+                        
+                        # Translation distance
+                        d_trans = torch.norm(t_rel)
+                        
+                        # Combined distance with pose_id_scalar_lambda_trans weighting
+                        # Same formula as in compute_lie_scalar_index_torch
+                        distance_matrix[i, j] = torch.sqrt(
+                            theta**2 + (pose_id_scalar_lambda_trans**2) * d_trans**2
+                        )
+            
+            # Find medoid: frame with minimum sum of distances
+            dist_sums = distance_matrix.sum(dim=1)  # (N,)
+            ref_frame_idx = torch.argmin(dist_sums).item()
+        else:
+            raise NotImplementedError(
+                f"pose_anchor_rereference_strategy='{pose_anchor_rereference_strategy}' not supported. "
+                f"Only 'first' and 'medoid' are implemented."
+            )
         
-        # Compute distance matrix: D[i,j] = distance between pose i and pose j
-        # Using same Lie scalar metric as compute_lie_scalar_index_torch
-        distance_matrix = torch.zeros(N, N, device=device)
-        for i in range(N):
-            for j in range(N):
-                if i != j:
-                    # Compute relative pose: T_j_to_i = inv(T_i_to_w) @ T_j_to_w
-                    pose_i_w2c = torch.linalg.inv(selected_frames_poses[i])
-                    pose_rel = pose_i_w2c @ selected_frames_poses[j]
-                    
-                    # Compute Lie scalar distance (rotation angle + weighted translation)
-                    R_rel = pose_rel[:3, :3]
-                    t_rel = pose_rel[:3, 3]
-                    
-                    # Rotation angle from trace(R) = 1 + 2*cos(theta)
-                    trace = torch.diagonal(R_rel).sum()
-                    cos_theta = (trace - 1.0) / 2.0
-                    cos_theta = torch.clamp(cos_theta, -1.0, 1.0)
-                    theta = torch.acos(cos_theta)
-                    
-                    # Translation distance
-                    d_trans = torch.norm(t_rel)
-                    
-                    # Combined distance with pose_id_scalar_lambda_trans weighting
-                    # Same formula as in compute_lie_scalar_index_torch
-                    distance_matrix[i, j] = torch.sqrt(
-                        theta**2 + (pose_id_scalar_lambda_trans**2) * d_trans**2
-                    )
-        
-        # Find medoid: frame with minimum sum of distances
-        dist_sums = distance_matrix.sum(dim=1)  # (N,)
-        ref_frame_idx = torch.argmin(dist_sums).item()
+        print(f'[INFO] Reference frame index: {ref_frame_idx}')
+    elif pose_enc_type == "THW":
+        # THW mode: no pose computation needed
+        ref_frame_idx = None
+        print(f'[INFO] THW mode: skipping pose reference frame selection')
     else:
-        raise NotImplementedError(
-            f"pose_anchor_rereference_strategy='{pose_anchor_rereference_strategy}' not supported. "
-            f"Only 'first' and 'medoid' are implemented."
-        )
-    
-    print(f'[INFO] Reference frame index: {ref_frame_idx}')
+        raise ValueError(f"Unknown pose_enc_type: {pose_enc_type}. Must be 'PTHW', 'PHW', or 'THW'.")
     # ------------------ END EXTEND ------------------
 
     # ------------------ REUSE: compute Pose index (P) via Lie scalar ------------------
-    # P shape: (num_frames,), range: [0, 1] if global_normalize=True
-    # NOTE: Using same pose_id_scalar_lambda_trans as medoid selection to ensure:
-    #       (1) Medoid selection criterion matches the final distance metric
-    #       (2) P value ordering is consistent with the chosen anchor frame
-    P = compute_lie_scalar_index_torch(
-        poses_c2w=selected_frames_poses,
-        pose_id_scalar_lambda_trans=pose_id_scalar_lambda_trans,  # Same weighting as medoid selection
-        traj_scale_norm=True,
-        global_normalize=True,
-        reorth_rot=True,
-        reference_frame_id=ref_frame_idx,  # 🆕 NEW: use selected anchor frame
-    )
-    # min is for sure zero, as reference frame distance to itself is 0
-    print(f'P_nonscaled/anchor_strategy:{pose_anchor_rereference_strategy}/archor_idx:{ref_frame_idx}:')
-    print(f'{P}')
-    # if reorth is disabled we can gurateen P[ref_frame_idx] == 0
-    # assert P[ref_frame_idx] == 0, \
-        # f"P[{ref_frame_idx}] (reference frame) should be 0, but got {P[ref_frame_idx]}"
-    # sanity check P
-    if P.min() < 0 or P.max() == 0:
-        raise ValueError(f"P contains invalid values, min={P.min()}, max={P.max()}")
+    # Skip for THW mode (no pose dimension)
+    if pose_enc_type == "PTHW" or pose_enc_type == "PHW":
+        # P shape: (num_frames,), range: [0, 1] if global_normalize=True
+        # NOTE: Using same pose_id_scalar_lambda_trans as medoid selection to ensure:
+        #       (1) Medoid selection criterion matches the final distance metric
+        #       (2) P value ordering is consistent with the chosen anchor frame
+        P = compute_lie_scalar_index_torch(
+            poses_c2w=selected_frames_poses,
+            pose_id_scalar_lambda_trans=pose_id_scalar_lambda_trans,  # Same weighting as medoid selection
+            traj_scale_norm=True,
+            global_normalize=True,
+            reorth_rot=True,
+            reference_frame_id=ref_frame_idx,  # 🆕 NEW: use selected anchor frame
+        )
+        # min is for sure zero, as reference frame distance to itself is 0
+        print(f'P_nonscaled/anchor_strategy:{pose_anchor_rereference_strategy}/archor_idx:{ref_frame_idx}:')
+        print(f'{P}')
+        # if reorth is disabled we can gurateen P[ref_frame_idx] == 0
+        # assert P[ref_frame_idx] == 0, \
+            # f"P[{ref_frame_idx}] (reference frame) should be 0, but got {P[ref_frame_idx]}"
+        # sanity check P
+        if P.min() < 0 or P.max() == 0:
+            raise ValueError(f"P contains invalid values, min={P.min()}, max={P.max()}")
+        
+        # ✏️ FIXED: Ensure P is on the same device as input_ids
+        P = P.to(input_ids.device)
+    elif pose_enc_type == "THW":
+        # THW mode: no pose computation
+        P = None
+        print(f'[INFO] THW mode: skipping Pose index computation')
+    else:
+        raise ValueError(f"Unknown pose_enc_type: {pose_enc_type}. Must be 'PTHW', 'PHW', or 'THW'.")
     # ------------------ END REUSE ------------------
-
-    # ------------------ EXTEND: Move P to correct device ------------------
-    # ✏️ FIXED: Ensure P is on the same device as input_ids
-    P = P.to(input_ids.device)
-
-    # ------------------ END EXTEND ------------------
 
     # ------------------ EXTEND: iterate batch and vision tokens to build PTHW indices ------------------
     image_token_id = config.image_token_id
@@ -755,62 +789,69 @@ def custom_get_pose_rope_index(
             text_len = ed - st
             # JJ: st_idx is based on max of all dimensions (including Pose)
             st_idx = llm_pos_ids_list[-1].max() + 1 if len(llm_pos_ids_list) > 0 else 0
-            # JJ: For text tokens, all 4 dimensions (PTHW) follow sequential pattern
-            text_pthw = torch.arange(text_len, dtype=torch.float32, device=input_ids.device).view(1, -1).expand(4, -1) + st_idx
-            llm_pos_ids_list.append(text_pthw)
+            # JJ: For text tokens, all dimensions (P(T)HW) follow sequential pattern
+            text_pos = torch.arange(text_len, dtype=torch.float32, device=input_ids.device).view(1, -1).expand(num_dims, -1) + st_idx
+            llm_pos_ids_list.append(text_pos)
             llm_visual_mask_list.append(torch.zeros(text_len, dtype=torch.long, device=input_ids.device))
 
             # -------------------------
             # Vision patch segment: Pose + Temporal + Height + Width
             # -------------------------
-            # JJ: Sanity check - P length should match llm_grid_t * temporal_patch_size
-            assert len(P) == llm_grid_t * temporal_patch_size, \
-                f"Expected P length {llm_grid_t * temporal_patch_size}, got {len(P)}"
-            
-            # JJ: Aggregate P based on temporal_patch_size
-            selected_frames_tensor = P.view(llm_grid_t, temporal_patch_size)
-            if pose_merge_strategy == 'mean':
-                pose_range_tensor = selected_frames_tensor.mean(dim=1)
-            elif pose_merge_strategy == 'first':
-                pose_range_tensor = selected_frames_tensor[:, 0]
-            elif pose_merge_strategy == 'last':
-                pose_range_tensor = selected_frames_tensor[:, -1]
-            elif pose_merge_strategy == 'median':
-                pose_range_tensor = selected_frames_tensor.median(dim=1)[0]
+            # JJ: Process Pose dimension (skip for THW mode)
+            if pose_enc_type == "PTHW" or pose_enc_type == "PHW":
+                # JJ: Sanity check - P length should match llm_grid_t * temporal_patch_size
+                assert len(P) == llm_grid_t * temporal_patch_size, \
+                    f"Expected P length {llm_grid_t * temporal_patch_size}, got {len(P)}"
+                
+                # JJ: Aggregate P based on temporal_patch_size
+                selected_frames_tensor = P.view(llm_grid_t, temporal_patch_size)
+                if pose_merge_strategy == 'mean':
+                    pose_range_tensor = selected_frames_tensor.mean(dim=1)
+                elif pose_merge_strategy == 'first':
+                    pose_range_tensor = selected_frames_tensor[:, 0]
+                elif pose_merge_strategy == 'last':
+                    pose_range_tensor = selected_frames_tensor[:, -1]
+                elif pose_merge_strategy == 'median':
+                    pose_range_tensor = selected_frames_tensor.median(dim=1)[0]
+                else:
+                    raise ValueError(
+                        f"Unknown pose_merge_strategy: {pose_merge_strategy}. "
+                        f"Supported strategies: ['mean', 'first', 'last', 'median']"
+                    )
+                
+                # JJ: Warning if pose and temporal strategies differ
+                if pose_merge_strategy != temporal_readapted_merge_strategy:
+                    print(f"[WARNING] pose_merge_strategy ('{pose_merge_strategy}') != temporal_readapted_merge_strategy ('{temporal_readapted_merge_strategy}')")
+                
+                # JJ: Optionally re-normalize aggregated pose to [0, 1] before scaling
+                # Motivation: Aggregation (especially mean) hides the zero pose due to re-reference,
+                # losing "reference frame" semantics. Re-norm restores this and ensures consistent
+                # range utilization, mirroring the temporal dimension's handling.
+                if hard_reset_reference_after_pose_merge:
+                    pose_min = pose_range_tensor.min()
+                    pose_max = pose_range_tensor.max()
+                    pose_range = pose_max - pose_min
+                    if pose_range > 0:
+                        pose_range_tensor = (pose_range_tensor - pose_min) / pose_range  # Re-norm to [0, 1]
+                
+                # JJ: Scale (re-)normalized pose to target range
+                if pose_use_dynamic_scale_factor:
+                    # Dynamic: scale to [0, len(selected_frames_poses) - 1]
+                    target_max_p_pos = len(selected_frames_poses) - 1
+                    pose_range_tensor = pose_range_tensor * target_max_p_pos
+                else:
+                    # Fixed: scale to [0, pose_scale_factor]
+                    pose_range_tensor = pose_range_tensor * pose_scale_factor
+                
+                # JJ: Expand pose_range_tensor to H*W patches
+                pose_idx = pose_range_tensor.view(-1, 1).expand(-1, llm_grid_h * llm_grid_w).flatten()
+                # Keep pose_idx as float for precise frequency encoding
+                # DEBUG: print(f"DEBUG pose_idx range: [{pose_idx.min():.4f}, {pose_idx.max():.4f}]")
+            elif pose_enc_type == "THW":
+                # THW mode - no pose processing needed
+                pass
             else:
-                raise ValueError(
-                    f"Unknown pose_merge_strategy: {pose_merge_strategy}. "
-                    f"Supported strategies: ['mean', 'first', 'last', 'median']"
-                )
-            
-            # JJ: Warning if pose and temporal strategies differ
-            if pose_merge_strategy != temporal_readapted_merge_strategy:
-                print(f"[WARNING] pose_merge_strategy ('{pose_merge_strategy}') != temporal_readapted_merge_strategy ('{temporal_readapted_merge_strategy}')")
-            
-            # JJ: Optionally re-normalize aggregated pose to [0, 1] before scaling
-            # Motivation: Aggregation (especially mean) hides the zero pose due to re-reference,
-            # losing "reference frame" semantics. Re-norm restores this and ensures consistent
-            # range utilization, mirroring the temporal dimension's handling.
-            if hard_reset_reference_after_pose_merge:
-                pose_min = pose_range_tensor.min()
-                pose_max = pose_range_tensor.max()
-                pose_range = pose_max - pose_min
-                if pose_range > 0:
-                    pose_range_tensor = (pose_range_tensor - pose_min) / pose_range  # Re-norm to [0, 1]
-            
-            # JJ: Scale (re-)normalized pose to target range
-            if pose_use_dynamic_scale_factor:
-                # Dynamic: scale to [0, len(selected_frames_poses) - 1]
-                target_max_p_pos = len(selected_frames_poses) - 1
-                pose_range_tensor = pose_range_tensor * target_max_p_pos
-            else:
-                # Fixed: scale to [0, pose_scale_factor]
-                pose_range_tensor = pose_range_tensor * pose_scale_factor
-            
-            # JJ: Expand pose_range_tensor to H*W patches
-            pose_idx = pose_range_tensor.view(-1, 1).expand(-1, llm_grid_h * llm_grid_w).flatten()
-            # Keep pose_idx as float for precise frequency encoding
-            # DEBUG: print(f"DEBUG pose_idx range: [{pose_idx.min():.4f}, {pose_idx.max():.4f}]")
+                raise ValueError(f"Unknown pose_enc_type: {pose_enc_type}. Must be 'PTHW', 'PHW', or 'THW'.")
             
             # -------------------------
             # Temporal index: inherit from custom_get_rope_index (lines 389-455)
@@ -877,20 +918,47 @@ def custom_get_pose_rope_index(
             h_index = torch.arange(llm_grid_h, device=input_ids.device).view(1, -1, 1).expand(llm_grid_t, -1, llm_grid_w).flatten()
             w_index = torch.arange(llm_grid_w, device=input_ids.device).view(1, 1, -1).expand(llm_grid_t, llm_grid_h, -1).flatten()
             
-            # JJ: Stack as Pose + T + H + W
-            # Pose dimension: optionally add offset based on do_offset_in_pose_pos_id flag
-            # T/H/W dimensions: always add offset to maintain continuous position IDs
-            if do_offset_in_pose_pos_id:
-                # Pose follows sequential pattern with offset
-                print('Again inspect pose_idx:')
-                print(f'{pose_idx.min()},{pose_idx.max()}')
-                pose_with_offset = pose_idx + text_len + st_idx
-                thw_with_offset = torch.stack([t_index, h_index, w_index]).float() + text_len + st_idx
-                llm_pos_ids_list.append(torch.cat([pose_with_offset.unsqueeze(0), thw_with_offset], dim=0))
+            # JJ: Stack based on pose_enc_type
+            # PTHW mode: Pose + T + H + W (4D)
+            # PHW mode:  Pose + H + W (3D, ignore T)
+            # THW mode:  T + H + W (3D, ignore Pose, standard mRoPE)
+            
+            # Prepare H/W with offset (always add offset for spatial dimensions)
+            h_with_offset = h_index.float() + text_len + st_idx
+            w_with_offset = w_index.float() + text_len + st_idx
+            
+            if pose_enc_type == "PTHW":
+                # 4D mode: Pose + Temporal + Height + Width
+                if do_offset_in_pose_pos_id:
+                    # Pose follows sequential pattern with offset
+                    print('Again inspect pose_idx:')
+                    print(f'{pose_idx.min()},{pose_idx.max()}')
+                    pose_with_offset = pose_idx + text_len + st_idx
+                else:
+                    # Pose stays in its normalized range [0, pose_scale_factor]
+                    pose_with_offset = pose_idx
+                
+                t_with_offset = t_index.float() + text_len + st_idx
+                vision_pos = torch.stack([pose_with_offset, t_with_offset, h_with_offset, w_with_offset], dim=0)
+                
+            elif pose_enc_type == "PHW":
+                # 3D mode: Pose + Height + Width (ignore temporal dimension)
+                if do_offset_in_pose_pos_id:
+                    pose_with_offset = pose_idx + text_len + st_idx
+                else:
+                    pose_with_offset = pose_idx
+                
+                vision_pos = torch.stack([pose_with_offset, h_with_offset, w_with_offset], dim=0)
+                
+            elif pose_enc_type == "THW":
+                # 3D mode: Temporal + Height + Width (ignore pose, standard mRoPE)
+                t_with_offset = t_index.float() + text_len + st_idx
+                vision_pos = torch.stack([t_with_offset, h_with_offset, w_with_offset], dim=0)
+            
             else:
-                # Pose stays in its normalized range [0, pose_scale_factor]
-                thw_with_offset = torch.stack([t_index, h_index, w_index]).float() + text_len + st_idx
-                llm_pos_ids_list.append(torch.cat([pose_idx.unsqueeze(0), thw_with_offset], dim=0))
+                raise ValueError(f"Unknown pose_enc_type: {pose_enc_type}")
+            
+            llm_pos_ids_list.append(vision_pos)
             
             vision_len = llm_grid_t * llm_grid_h * llm_grid_w
             llm_visual_mask_list.append(torch.ones(vision_len, dtype=torch.long, device=input_ids.device))
@@ -901,12 +969,12 @@ def custom_get_pose_rope_index(
             text_len = len(input_tokens) - st
             # JJ: st_idx is based on max of all dimensions (including Pose)
             st_idx = llm_pos_ids_list[-1].max() + 1 if len(llm_pos_ids_list) > 0 else 0
-            # JJ: For text tokens, all 4 dimensions (PTHW) follow sequential pattern
-            text_pthw = torch.arange(text_len, dtype=torch.float32, device=input_ids.device).view(1, -1).expand(4, -1) + st_idx
-            llm_pos_ids_list.append(text_pthw)
+            # JJ: For text tokens, all dimensions (P(T)HW) follow sequential pattern
+            text_pos = torch.arange(text_len, dtype=torch.float32, device=input_ids.device).view(1, -1).expand(num_dims, -1) + st_idx
+            llm_pos_ids_list.append(text_pos)
             llm_visual_mask_list.append(torch.zeros(text_len, dtype=torch.long, device=input_ids.device))
 
-        llm_positions = torch.cat(llm_pos_ids_list, dim=1).reshape(4, -1)
+        llm_positions = torch.cat(llm_pos_ids_list, dim=1).reshape(num_dims, -1)
         llm_visual_mask = torch.cat(llm_visual_mask_list, dim=0).reshape(-1)
         
         position_ids[..., i, attention_mask[i]==1] = llm_positions.to(position_ids.device)
@@ -915,8 +983,6 @@ def custom_get_pose_rope_index(
 
     rope_deltas = torch.tensor(rope_deltas, device=input_ids.device).unsqueeze(1)
     return position_ids, rope_deltas, visual_token_mask
-
-
 if __name__ == "__main__":
     config = Qwen2_5_VLConfig()
     # update some param

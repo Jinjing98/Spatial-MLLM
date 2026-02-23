@@ -44,7 +44,11 @@ PRETRAINED_MODEL_NAME_OR_PATH="Qwen/Qwen2.5-VL-3B-Instruct"
 RUN_NAME_APPENDIX="_2x8_tso"
 # JJ: 4D Pose RoPE config (only for custom-spatial-mllm)
 USE_POSE_ROPE=True  # Set to True to enable 4D Pose-aware RoPE
-POSE_ENC_TYPE="PTHW"  # Pose encoding type (only 'PTHW' supported)
+POSE_ENC_TYPE="PTHW"  # Pose encoding type ('PTHW', 'PHW', or 'THW')
+MROPE_SECTION="8 8 24 24"  # Custom mrope_section (e.g., "16 24 24" for 3D or "8 8 24 24" for 4D). Leave empty for default.
+                  # Examples: 
+                  # - For PTHW (4D): MROPE_SECTION="8 8 24 24"
+                  # - For PHW/THW (3D): MROPE_SECTION="16 24 24"
 
 # Distributed training configuration
 MASTER_ADDR=${MASTER_ADDR:-"127.0.0.1"}
@@ -136,7 +140,14 @@ args="
 # JJ: Add Pose RoPE args if enabled (only for custom-spatial-mllm)
 if [ "$USE_POSE_ROPE" = "True" ] || [ "$USE_POSE_ROPE" = "true" ]; then
     args="$args --use_pose_rope --pose_enc_type ${POSE_ENC_TYPE}"
-    echo "[Training] 4D Pose RoPE enabled: pose_enc_type=${POSE_ENC_TYPE}"
+    
+    # Add mrope_section if provided
+    if [ -n "$MROPE_SECTION" ]; then
+        args="$args --mrope_section ${MROPE_SECTION}"
+        echo "[Training] 4D Pose RoPE enabled: pose_enc_type=${POSE_ENC_TYPE}, mrope_section=${MROPE_SECTION}"
+    else
+        echo "[Training] 4D Pose RoPE enabled: pose_enc_type=${POSE_ENC_TYPE} (using default mrope_section)"
+    fi
 fi
 
     #  \

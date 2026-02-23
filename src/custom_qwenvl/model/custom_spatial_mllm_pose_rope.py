@@ -369,20 +369,54 @@ def forward_with_pose_rope(
                 print(f"{position_ids.shape}")  # (4, B, L) or (3, B, L)
 
                 if self.use_pose_rope:
-                    # 🆕 NEW: 4D position_ids debug output
-                    print(f"Early Text Position_ids (4D: P,T,H,W):")
-                    print(f"P: {position_ids[0,0,:num_pre_text+3]}")
-                    print(f"T: {position_ids[1,0,:num_pre_text+3]}")
-                    print(f"H: {position_ids[2,0,:num_pre_text+3]}")
-                    print(f"W: {position_ids[3,0,:num_pre_text+3]}")
-                    
-                    print(f"Middle (vision) Position_ids:")
-                    print(f"P: {position_ids[0,0,num_pre_text:inspect_range:per_image_token_num//2]}")
-                    print(f"T: {position_ids[1,0,num_pre_text:inspect_range:per_image_token_num//2]}")
-                    
-                    print(f"Later (Most) Position_ids:")
-                    print(f"P: {position_ids[0,0,-(num_post_text+5):]}")
-                    print(f"T: {position_ids[1,0,-(num_post_text+5):]}")
+                    print('Pose_enc_type:', self.pose_enc_type)
+                    if self.pose_enc_type == "PTHW":
+                        # 🆕 NEW: 4D position_ids debug output
+                        print(f"Early Text Position_ids (4D: P,T,H,W):")
+                        print(f"P: {position_ids[0,0,:num_pre_text+3]}")
+                        print(f"T: {position_ids[1,0,:num_pre_text+3]}")
+                        print(f"H: {position_ids[2,0,:num_pre_text+3]}")
+                        print(f"W: {position_ids[3,0,:num_pre_text+3]}")
+                        
+                        print(f"Middle (vision) Position_ids:")
+                        print(f"P: {position_ids[0,0,num_pre_text:inspect_range:per_image_token_num//2]}")
+                        print(f"T: {position_ids[1,0,num_pre_text:inspect_range:per_image_token_num//2]}")
+                        
+                        print(f"Later (Most) Position_ids:")
+                        print(f"P: {position_ids[0,0,-(num_post_text+5):]}")
+                        print(f"T: {position_ids[1,0,-(num_post_text+5):]}")
+                    elif self.pose_enc_type == "PHW":
+                        print(f"Early Text Position_ids (3D: P,H,W):")
+                        print(f"P: {position_ids[0,0,:num_pre_text+3]}")
+                        print(f"H: {position_ids[1,0,:num_pre_text+3]}")
+                        print(f"W: {position_ids[2,0,:num_pre_text+3]}")
+                        
+                        print(f"Middle (vision) Position_ids:")
+                        print(f"P: {position_ids[0,0,num_pre_text:inspect_range:per_image_token_num//2]}")
+                        print(f"H: {position_ids[1,0,num_pre_text:inspect_range:per_image_token_num//2]}")
+                        print(f"W: {position_ids[2,0,num_pre_text:inspect_range:per_image_token_num//2]}")
+                        
+                        print(f"Later (Most) Position_ids:")
+                        print(f"P: {position_ids[0,0,-(num_post_text+5):]}")
+                        print(f"H: {position_ids[1,0,-(num_post_text+5):]}")
+                        print(f"W: {position_ids[2,0,-(num_post_text+5):]}")
+                    elif self.pose_enc_type == "THW":
+                        print(f"Early Text Position_ids (3D: T,H,W):")
+                        print(f"T: {position_ids[0,0,:num_pre_text+3]}")
+                        print(f"H: {position_ids[1,0,:num_pre_text+3]}")
+                        print(f"W: {position_ids[2,0,:num_pre_text+3]}")
+                        
+                        print(f"Middle (vision) Position_ids:")
+                        print(f"T: {position_ids[0,0,num_pre_text:inspect_range:per_image_token_num//2]}")
+                        print(f"H: {position_ids[1,0,num_pre_text:inspect_range:per_image_token_num//2]}")
+                        print(f"W: {position_ids[2,0,num_pre_text:inspect_range:per_image_token_num//2]}")
+                        
+                        print(f"Later (Most) Position_ids:")
+                        print(f"T: {position_ids[0,0,-(num_post_text+5):]}")
+                        print(f"H: {position_ids[1,0,-(num_post_text+5):]}")
+                        print(f"W: {position_ids[2,0,-(num_post_text+5):]}")
+                    else:
+                        raise ValueError(f"Unknown pose_enc_type: {self.pose_enc_type}. Must be 'PTHW', 'PHW', or 'THW'.")
                 else:
                     # Original 3D position_ids debug output (UNCHANGED)
                     print(f"Early Text Position_ids:")
@@ -409,9 +443,18 @@ def forward_with_pose_rope(
                 delta = delta.repeat_interleave(batch_size // delta.shape[0], dim=0)
             position_ids = position_ids.add(delta)
             
-            # ✏️ MODIFIED: Adjust dimensions based on use_pose_rope
+            # ✏️ MODIFIED: Adjust dimensions based on pose_enc_type
             if self.use_pose_rope:
-                position_ids = position_ids.unsqueeze(0).expand(4, -1, -1)  # 🆕 NEW: 4D for generation
+                # JJ: Dynamically determine dimensions based on pose_enc_type
+                if self.pose_enc_type == "PTHW":
+                    num_dims = 4  # Pose + Temporal + Height + Width
+                elif self.pose_enc_type == "PHW":
+                    num_dims = 3  # Pose + H + W
+                elif self.pose_enc_type == "THW":
+                    num_dims = 3  # T + H + W
+                else:
+                    raise ValueError(f"Unknown pose_enc_type: {self.pose_enc_type}. Must be 'PTHW', 'PHW', or 'THW'.")
+                position_ids = position_ids.unsqueeze(0).expand(num_dims, -1, -1)
             else:
                 position_ids = position_ids.unsqueeze(0).expand(3, -1, -1)  # Original 3D
 
@@ -562,6 +605,7 @@ def patch_model_with_pose_rope(
     model,
     use_pose_rope=True,
     pose_enc_type="PTHW",
+    mrope_section=None,  # JJ: New parameter to configure RoPE section sizes
 ):
     """
     Apply monkey patch to enable 4D Pose-aware RoPE.
@@ -569,7 +613,11 @@ def patch_model_with_pose_rope(
     Args:
         model: CustomSpatialMLLMForConditionalGeneration instance
         use_pose_rope: Whether to use 4D Pose RoPE (True) or 3D mRoPE (False)
-        pose_enc_type: Pose encoding type, currently only 'PTHW' supported
+        pose_enc_type: Pose encoding type, 'PTHW' (4D) or 'PHW' (3D)
+        mrope_section: List of section sizes for each dimension. If None, use model's config default.
+            - For THW (3D): [16, 24, 24] (default)
+            - For PTHW (4D): [P_dim, T_dim, H_dim, W_dim], e.g., [16, 16, 24, 24]
+            - For PHW (3D): [P_dim, H_dim, W_dim], e.g., [16, 24, 24]
         
     Note:
         All RoPE parameters are inherited from model's existing attributes:
@@ -592,13 +640,73 @@ def patch_model_with_pose_rope(
     
     Example:
         >>> model = CustomSpatialMLLMForConditionalGeneration(config)
-        >>> patch_model_with_pose_rope(model, use_pose_rope=True)
-        >>> # Now model.forward uses 4D Pose RoPE
+        >>> # Use 4D PTHW with custom section sizes
+        >>> patch_model_with_pose_rope(model, use_pose_rope=True, pose_enc_type="PTHW", mrope_section=[16, 16, 24, 24])
+        >>> # Use 3D PHW with custom section sizes
+        >>> patch_model_with_pose_rope(model, use_pose_rope=True, pose_enc_type="PHW", mrope_section=[16, 24, 24])
     """
     # 🆕 NEW: Add Pose RoPE configuration attributes
     model.use_pose_rope = use_pose_rope
     model.pose_enc_type = pose_enc_type
     
+    # Get head_dim from config
+    head_dim = model.config.hidden_size // model.config.num_attention_heads
+    expected_sum = int(head_dim / 2)  # mrope_section sum should equal head_dim/2
+    
+    # 🆕 NEW: Configure mrope_section based on pose_enc_type
+    if mrope_section is not None:
+        # User provided custom mrope_section - perform sanity checks
+        print(f"[INFO] Validating custom mrope_section: {mrope_section}")
+        
+        # Check 1: Dimension count based on pose_enc_type
+        if pose_enc_type == "PTHW":
+            expected_dims = 4
+        elif pose_enc_type == "PHW":
+            expected_dims = 3
+        elif pose_enc_type == "THW":
+            expected_dims = 3
+        else:
+            raise NotImplementedError(f"Unknown pose_enc_type: {pose_enc_type}. Must be 'PTHW', 'PHW', or 'THW'.")
+        
+        if len(mrope_section) != expected_dims:
+            raise ValueError(
+                f"mrope_section length mismatch for pose_enc_type='{pose_enc_type}': "
+                f"expected {expected_dims} dimensions, got {len(mrope_section)}. "
+                f"mrope_section = {mrope_section}"
+            )
+        
+        # Check 2: Sum should equal head_dim/2 (64 for head_dim=128)
+        actual_sum = sum(mrope_section)
+        if actual_sum != expected_sum:
+            raise ValueError(
+                f"mrope_section sum mismatch: expected {expected_sum} (head_dim={head_dim}, head_dim/2={expected_sum}), "
+                f"got {actual_sum}. mrope_section = {mrope_section}"
+            )
+        
+        model.config.rope_scaling["mrope_section"] = mrope_section
+        print(f"[INFO] ✓ Sanity check passed. Using custom mrope_section: {mrope_section}")
+    else:
+        # Use default based on pose_enc_type
+        if pose_enc_type == "PTHW":
+            # 4D: Need to define appropriate section sizes for [P, T, H, W]
+            # Default: distribute head_dim (128) across 4 dimensions
+            default_mrope_section = [8, 8, 24, 24]  # Total = 80, *2 = 160 (may need adjustment)
+            model.config.rope_scaling["mrope_section"] = default_mrope_section
+            print(f"[INFO] Using default PTHW mrope_section: {default_mrope_section}")
+        elif pose_enc_type == "PHW":
+            # 3D: [P, H, W] - similar to THW but with Pose instead of Temporal
+            default_mrope_section = [16, 24, 24]  # Total = 64, *2 = 128
+            model.config.rope_scaling["mrope_section"] = default_mrope_section
+            print(f"[INFO] Using default PHW mrope_section: {default_mrope_section}")
+        elif pose_enc_type == "THW":
+            # Keep original THW configuration
+            if "mrope_section" not in model.config.rope_scaling:
+                model.config.rope_scaling["mrope_section"] = [16, 24, 24]  # Default THW
+            print(f"[INFO] Using existing/default mrope_section: {model.config.rope_scaling['mrope_section']}")
+        else:
+            raise NotImplementedError(f"Unknown pose_enc_type: {pose_enc_type}. Must be 'PTHW', 'PHW', or 'THW'.")
+    
+
     # Verify that model has all required Temporal parameters (should be defined in __init__)
     assert hasattr(model, 'temporal_readapted_merge_strategy'), \
         "Model must have temporal_readapted_merge_strategy attribute (defined in model.__init__)"
@@ -636,6 +744,7 @@ def patch_model_with_pose_rope(
     print(f"[INFO] ========================================")
     print(f"[INFO] - use_pose_rope: {use_pose_rope}")
     print(f"[INFO] - pose_enc_type: {pose_enc_type}")
+    print(f"[INFO] - mrope_section: {model.config.rope_scaling['mrope_section']}")
     print(f"[INFO]")
     print(f"[INFO] Temporal Parameters (inherited from model.__init__):")
     print(f"[INFO]   - temporal_readapted_merge_strategy: {model.temporal_readapted_merge_strategy}")

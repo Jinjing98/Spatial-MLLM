@@ -385,7 +385,7 @@ def print_latex_results(metrics: Dict, model_name: str, dataset_metrics: Dict[st
     print("="*80 + "\n")
 
 
-def evaluate_vsibench(vsi_data, model_type, model_path, batch_size, video_dir, output_path, video_nframes, sample_fps=None, use_visual=None, use_geo=None, use_pose_rope=False, pose_enc_type="PTHW"):
+def evaluate_vsibench(vsi_data, model_type, model_path, batch_size, video_dir, output_path, video_nframes, sample_fps=None, use_visual=None, use_geo=None, use_pose_rope=False, pose_enc_type="PTHW", mrope_section=None):
     """Evaluate model on a specific dataset. Forces batch size to 1."""
 
     setup_logging()
@@ -395,14 +395,58 @@ def evaluate_vsibench(vsi_data, model_type, model_path, batch_size, video_dir, o
     # 🆕 NEW: Apply Pose RoPE monkey patch for custom-spatial-mllm
     if model_type == "custom-spatial-mllm" and use_pose_rope:
         from src.custom_qwenvl.model.custom_spatial_mllm_pose_rope import patch_model_with_pose_rope
+        
+        # Print user-level configuration before patching
+        print(f"[Evaluation] 🔧 Applying Pose RoPE configuration:")
+        print(f"[Evaluation]    - pose_enc_type: {pose_enc_type}")
+        print(f"[Evaluation]    - mrope_section: {mrope_section if mrope_section else 'default (will be determined by pose_enc_type)'}")
+        
+        # 🆕 NEW: Validate config consistency if model was trained with Pose RoPE
+        if hasattr(model.config, 'pose_rope_config'):
+            saved_config = model.config.pose_rope_config
+            print(f"[Evaluation] 📋 Detected saved Pose RoPE config in checkpoint:")
+            print(f"[Evaluation]    - use_pose_rope: {saved_config.get('use_pose_rope')}")
+            print(f"[Evaluation]    - pose_enc_type: {saved_config.get('pose_enc_type')}")
+            print(f"[Evaluation]    - mrope_section: {saved_config.get('mrope_section')}")
+            
+            # Warn if mismatch
+            if not saved_config.get('use_pose_rope', False):
+                print(f"[Evaluation] ⚠️  WARNING: Checkpoint was trained WITHOUT Pose RoPE, but you're enabling it now!")
+                print(f"[Evaluation]    This may cause unexpected behavior. Consider using --use_pose_rope=False")
+            
+            if saved_config.get('pose_enc_type') != pose_enc_type:
+                print(f"[Evaluation] ⚠️  WARNING: pose_enc_type mismatch!")
+                print(f"[Evaluation]    Checkpoint: {saved_config.get('pose_enc_type')}")
+                print(f"[Evaluation]    Current: {pose_enc_type}")
+        
         model = patch_model_with_pose_rope(
             model,
             use_pose_rope=True,
             pose_enc_type=pose_enc_type,
+            mrope_section=mrope_section,  # 🆕 NEW: Pass custom mrope_section if provided
             # Note: All Temporal & Pose parameters are inherited from model.__init__
         )
-        print(f"[Evaluation] ✅ Monkey patch applied: Model now uses 4D Pose-aware RoPE (P+T+H+W)")
+        
+        # Dynamic message based on actual pose_enc_type
+        if pose_enc_type == "PTHW":
+            dims_desc = "4D Pose-aware RoPE (P+T+H+W)"
+        elif pose_enc_type == "PHW":
+            dims_desc = "3D Pose-aware RoPE (P+H+W, ignore temporal)"
+        elif pose_enc_type == "THW":
+            dims_desc = "3D standard mRoPE (T+H+W, ignore pose)"
+        else:
+            dims_desc = f"RoPE with pose_enc_type={pose_enc_type}"
+        
+        print(f"[Evaluation] ✅ Monkey patch applied: Model now uses {dims_desc}")
+        # Print final configuration after patching
+        actual_mrope_section = model.config.rope_scaling.get("mrope_section", "not found")
+        print(f"[Evaluation] 📊 Final mrope_section: {actual_mrope_section}")
     elif model_type == "custom-spatial-mllm" and not use_pose_rope:
+        # 🆕 NEW: Warn if checkpoint expects Pose RoPE but we're not using it
+        if hasattr(model.config, 'pose_rope_config') and model.config.pose_rope_config.get('use_pose_rope', False):
+            print(f"[Evaluation] ⚠️  WARNING: Checkpoint was trained WITH Pose RoPE, but you're NOT enabling it!")
+            print(f"[Evaluation]    Checkpoint config: {model.config.pose_rope_config}")
+            print(f"[Evaluation]    Consider using --use_pose_rope to match training configuration")
         print(f"[Evaluation] ℹ️  Using standard 3D mRoPE (T+H+W)")
     
     final_output = []
@@ -421,10 +465,10 @@ def evaluate_vsibench(vsi_data, model_type, model_path, batch_size, video_dir, o
     return final_output
 
 
-def run_worker(gpu_id, vsi_data, model_type, model_path, batch_size, video_dir, output_path, video_nframes, sample_fps=None, use_visual=None, use_geo=None, use_pose_rope=False, pose_enc_type="PTHW"):
+def run_worker(gpu_id, vsi_data, model_type, model_path, batch_size, video_dir, output_path, video_nframes, sample_fps=None, use_visual=None, use_geo=None, use_pose_rope=False, pose_enc_type="PTHW", mrope_section=None):
     """Worker function to run evaluation on a specific GPU."""
     os.environ["CUDA_VISIBLE_DEVICES"] = str(gpu_id)
-    evaluate_vsibench(vsi_data, model_type, model_path, batch_size, video_dir, output_path, video_nframes, sample_fps, use_visual, use_geo, use_pose_rope, pose_enc_type)
+    evaluate_vsibench(vsi_data, model_type, model_path, batch_size, video_dir, output_path, video_nframes, sample_fps, use_visual, use_geo, use_pose_rope, pose_enc_type, mrope_section)
 
 
 def main(args):
@@ -506,6 +550,7 @@ def main(args):
                     args.use_geo,
                     args.use_pose_rope,
                     args.pose_enc_type,
+                    args.mrope_section,  # 🆕 NEW: Pass custom mrope_section
                 ),
             )
             p.start()
@@ -693,7 +738,8 @@ if __name__ == "__main__":
     parser.add_argument("--use_geo", type=lambda x: x.lower() == 'true', default=None, help="Use geo embeddings (true/false, default: None for model default)")
     # JJ: 4D Pose RoPE config
     parser.add_argument("--use_pose_rope", action="store_true", default=False, help="Enable 4D Pose-aware RoPE (P+T+H+W) instead of 3D mRoPE (T+H+W)")
-    parser.add_argument("--pose_enc_type", type=str, default="PTHW", help="Pose encoding type (only 'PTHW' supported now)")
+    parser.add_argument("--pose_enc_type", type=str, default="PTHW", help="Pose encoding type ('PTHW', 'PHW', or 'THW')")
+    parser.add_argument("--mrope_section", type=int, nargs='+', default=None, help="Custom mrope_section (e.g., 16 24 24 for 3D or 8 8 24 24 for 4D)")
     # JJ : skip flags for eval / metric phases
     parser.add_argument("--skip_eval", action="store_true", default=False, help="Skip the evaluation (inference) phase, only compute metrics from existing results.")
     parser.add_argument("--skip_metric", action="store_true", default=False, help="Skip the metrics computation phase, only run evaluation.")
