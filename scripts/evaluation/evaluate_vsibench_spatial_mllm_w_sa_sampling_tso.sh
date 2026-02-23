@@ -95,11 +95,12 @@ MODEL_TYPE="spatial-mllm"
 # MODEL_TYPE="qwen2.5-vl"
 # MODEL_PATH="Qwen/Qwen2.5-VL-3B-Instruct"
 MODEL_TYPE="qwen3-vl"
+MODEL_TYPE="spatial-mllm-qwen3"
 MODEL_PATH="Qwen/Qwen3-VL-2B-Instruct"
-# MODEL_TYPE="spatial-mllm"
-MODEL_TYPE="custom-spatial-mllm"
-MODEL_PATH="Diankun/Spatial-MLLM-v1.1-Instruct-135K"
-MODEL_NAME_SUFFIX=""
+# # MODEL_TYPE="spatial-mllm"
+# MODEL_TYPE="custom-spatial-mllm"
+# MODEL_PATH="Diankun/Spatial-MLLM-v1.1-Instruct-135K"
+# MODEL_NAME_SUFFIX=""
 
 MODEL_NAME="${MODEL_TYPE}${MODEL_NAME_SUFFIX}"
 
@@ -185,9 +186,9 @@ for nframe in "${nframes[@]}"; do
         --batch_size 1 \
         --output_dir "$EXP_DIR" \
         --use_pose_rope \
-        --pose_enc_type "PTHW" \
-        --mrope_section 8 8 24 24 \
+        --pose_enc_type "PHW" \
         --output_name "eval_result" \
+        --skip_metric \
         $EXTRA_ARGS \
         2>&1 | tee -a "$LOG_FILE"
         

@@ -75,7 +75,7 @@ def main(
     # JJ: load model and processor with customized use_visual/use_geo
     model, processor = load_model_and_processor(model_type, model_path, use_visual=use_visual, use_geo=use_geo)
 
-    # 🆕 NEW: Apply Pose RoPE monkey patch for custom-spatial-mllm
+    # 🆕 NEW: Apply Pose RoPE monkey patch for custom-spatial-mllm (Qwen2.5)
     if model_type == "custom-spatial-mllm" and use_pose_rope:
         from src.custom_qwenvl.model.custom_spatial_mllm_pose_rope import patch_model_with_pose_rope
         
@@ -126,6 +126,33 @@ def main(
             print(f"[Inference]    Checkpoint config: {model.config.pose_rope_config}")
             print(f"[Inference]    Consider using --use_pose_rope to match training configuration")
         print(f"[Inference] ℹ️  Using standard 3D mRoPE (T+H+W)")
+    
+    # 🆕 NEW: Apply Pose RoPE monkey patch for spatial-mllm-qwen3 (Qwen3)
+    elif model_type == "spatial-mllm-qwen3" and use_pose_rope:
+        assert pose_enc_type == "PHW", "Qwen3 only supports PHW pose encoding type"
+        from src.custom_qwen3vl.model.spatial_mllm_qwen3_pose_rope import patch_qwen3_with_pose_rope
+        
+        # Validate config consistency
+        if hasattr(model.config, 'pose_rope_config'):
+            saved_config = model.config.pose_rope_config
+            print(f"[Inference] 📋 Detected saved Pose RoPE config in checkpoint:")
+            print(f"[Inference]    - use_pose_rope: {saved_config.get('use_pose_rope')}")
+            print(f"[Inference]    - pose_enc_type: {saved_config.get('pose_enc_type')}")
+            print(f"[Inference]    - mrope_section: {saved_config.get('mrope_section')}")
+        
+        assert pose_enc_type == "PHW", "Qwen3 only supports PHW pose encoding type"
+        model = patch_qwen3_with_pose_rope(
+            model,
+            use_pose_rope=True,
+            pose_enc_type=pose_enc_type,  # Default: "PHW" for Qwen3
+            mrope_section=mrope_section,
+        )
+        
+        print(f"[Inference] ✅ Qwen3 Pose RoPE applied: {pose_enc_type}")
+        actual_mrope_section = model.config.text_config.rope_parameters.get("mrope_section", "not found")
+        print(f"[Inference] 📊 Final mrope_section: {actual_mrope_section}")
+    elif model_type == "spatial-mllm-qwen3" and not use_pose_rope:
+        print(f"[Inference] ℹ️  Using Qwen3 standard 3D mRoPE (T+H+W)")
 
 
     # JJ: Handle both video file and image folder - use appropriate message constructor
@@ -137,7 +164,7 @@ def main(
     prompts_text = processor.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
     # JJ: Extract vision info from messages
     # For Qwen3-VL, we need to get video metadata from fetch_video
-    if model_type == "qwen3-vl":
+    if model_type in ["qwen3-vl", "spatial-mllm-qwen3"]:
         from qwen_vl_utils import extract_vision_info
         from src.evaluation.utils.common_utils import gen_videos_metadata
         
@@ -154,7 +181,7 @@ def main(
             padding=True,
             padding_side="left",
         )
-    else:
+    elif model_type in ["custom-spatial-mllm","spatial-mllm","qwen2.5-vl"]:
         # For other models, use standard process_vision_info
         from qwen_vl_utils import process_vision_info
         image_inputs, video_inputs = process_vision_info(messages)
@@ -166,6 +193,8 @@ def main(
             padding=True,
             padding_side="left",
         )
+    else:
+        raise ValueError(f"Invalid model type: {model_type}")
 
     # JJ: elaborate the batch info for debug
     elaborate_batch_info_debug(processor, batch)
@@ -178,6 +207,9 @@ def main(
         selected_frames_list = [selected_frames] if selected_frames is not None else None
         # JJ: Use prepare_spatial_mllm_inputs_with_framesid for custom-spatial-mllm to support mRoPE_readaptT
         batch = prepare_spatial_mllm_inputs_with_framesid(batch, video_inputs, image_inputs, selected_frames_list)
+    elif model_type in ["spatial-mllm-qwen3"]:
+        # JJ: Prepare inputs for Qwen3 Pose RoPE (same as spatial-mllm)
+        batch = prepare_spatial_mllm_inputs(batch, video_inputs, image_inputs)
     elif model_type in ["qwen2.5-vl"]:
         pass # Remain as it is
     elif model_type in ["qwen3-vl"]:
