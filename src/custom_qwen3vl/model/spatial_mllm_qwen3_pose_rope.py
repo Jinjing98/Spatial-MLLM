@@ -340,8 +340,10 @@ def patch_qwen3_with_pose_rope(
             reorth_rot=True,             # Re-orthogonalize rotation matrices for numerical stability
             reference_frame_id=ref_frame_idx  # Use determined reference frame (SAME as Qwen2.5)
         )  # Shape: (N_frames,), range: [0, 1]
-        print('Pose_distance_shape:',pose_distances.shape)
-        print('Pose_distance:',pose_distances)
+        
+        if model.offline_debug:
+            print('Pose_distance_shape:',pose_distances.shape)
+            print('Pose_distance:',pose_distances)
         
         # Sanity check (SAME as Qwen2.5)
         if pose_distances.min() < 0 or pose_distances.max() == 0:
@@ -432,8 +434,9 @@ def patch_qwen3_with_pose_rope(
             if model.offline_debug:
                 print(f'[Pose RoPE] Fixed scaling: multiply by {model.pose_scale_factor}')
         
-        print(f'[Pose RoPE] pose_use_dynamic_scale_factor: {model.pose_use_dynamic_scale_factor}')
-        print(f'[Pose RoPE] pose_range_tensor after scale: {pose_range_tensor}')
+        if model.offline_debug:
+            print(f'[Pose RoPE] pose_use_dynamic_scale_factor: {model.pose_use_dynamic_scale_factor}')
+            print(f'[Pose RoPE] pose_range_tensor after scale: {pose_range_tensor}')
         
         # JJ: Note - do NOT add offset here!
         # In Qwen2.5, offset (text_len + st_idx) is added when assembling vision_pos
@@ -506,7 +509,6 @@ def patch_qwen3_with_pose_rope(
         
         # ==================== Debug: Detailed Position IDs Printout ====================
         if model.offline_debug:
-        # if model.offline_debug:
             print(f"*"*20)
             print(f"Details During Prefill (Qwen3 PHW Pose RoPE):")
             print(f"video_grid_thw: {video_grid_thw}")

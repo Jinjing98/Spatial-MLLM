@@ -259,13 +259,13 @@ class SpatialMLLMQwen3ForConditionalGeneration(Qwen3VLForConditionalGeneration):
             self.current_video_grid_thw = video_grid_thw
             
             # JJ: Force print for debugging (remove after verification)
-            print(f"🎯 [Pose Estimation] Extracted {S} camera poses (c2w format)")
-            print(f"🎯 [Pose Estimation] video_tchw[0].shape = {video_tchw[0].shape}")
-            print(f"🎯 [Pose Estimation] Stored in self.selected_frames_poses for Monkey Patch")
+            # print(f"🎯 [Pose Estimation] Extracted {S} camera poses (c2w format)")
+            # print(f"🎯 [Pose Estimation] video_tchw[0].shape = {video_tchw[0].shape}")
+            # print(f"🎯 [Pose Estimation] Stored in self.selected_frames_poses for Monkey Patch")
             
-            if self.offline_debug:
-                print(f"[Pose Estimation] Extracted {S} camera poses (c2w format)")
-                print(f"[Pose Estimation] Stored in self.selected_frames_poses for Monkey Patch")
+            # if self.offline_debug:
+                # print(f"[Pose Estimation] Extracted {S} camera poses (c2w format)")
+                # print(f"[Pose Estimation] Stored in self.selected_frames_poses for Monkey Patch")
         
         elif pixel_values is not None and image_tchw is not None:
             # Image pose estimation (if needed in the future)
@@ -292,9 +292,9 @@ class SpatialMLLMQwen3ForConditionalGeneration(Qwen3VLForConditionalGeneration):
         use_pose_rope = pose_rope_config.get('use_pose_rope', False) if pose_rope_config else False
         
         if use_pose_rope and position_ids is not None:
-            if True:  # Always print warning for visibility
-                print(f"⚠️  [Pose RoPE] Discarding pre-computed position_ids to enable Pose-aware RoPE computation")
-                print(f"⚠️  [Pose RoPE] Model will dynamically compute position_ids using monkey-patched get_rope_index")
+            # if True:  # Always print warning for visibility
+                # print(f"⚠️  [Pose RoPE] Discarding pre-computed position_ids to enable Pose-aware RoPE computation")
+                # print(f"⚠️  [Pose RoPE] Model will dynamically compute position_ids using monkey-patched get_rope_index")
             position_ids = None  # Force dynamic computation
         
         # ==================== Call Parent Forward ====================
@@ -410,6 +410,12 @@ class SpatialMLLMQwen3ForConditionalGeneration(Qwen3VLForConditionalGeneration):
                 
                 if self.offline_debug:
                     print(f"[Prepare Inputs] ✅ Poses computed: {S} frames")
+            
+            # JJ: CRITICAL FIX - Clear video_tchw immediately after pose computation
+            # to prevent duplicate VGGT forward pass in forward() during prefill stage
+            kwargs["video_tchw"] = None
+            if self.offline_debug:
+                print(f"[Prepare Inputs] ✅ video_tchw cleared (prevents duplicate VGGT call)")
         
         model_inputs = super().prepare_inputs_for_generation(
             input_ids,
