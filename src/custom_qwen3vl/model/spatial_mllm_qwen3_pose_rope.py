@@ -169,6 +169,9 @@ def patch_qwen3_with_pose_rope(
         5. Return modified (position_ids, deltas)
         """
         
+        # JJ: Debug - verify monkey patch is called
+        print("🎯🎯🎯 [get_rope_index_with_pose] MONKEY PATCH IS CALLED!")
+        
         # ==================== Step 0: Prerequisites Check ====================
         # JJ: Strict error handling - no poses = raise error (as requested by user)
         if video_grid_thw is not None and model.selected_frames_poses is None:
@@ -244,10 +247,25 @@ def patch_qwen3_with_pose_rope(
             print(f"[Pose RoPE DEBUG] mrope_position_deltas: {mrope_position_deltas}")
         
         # Step 2: Check if we need to add Pose dimension
-        if video_grid_thw is None or model.selected_frames_poses is None:
-            # No video or no pose data, return original
-
+        # JJ: Strict check - if Pose RoPE is enabled but poses are missing, raise error
+        if video_grid_thw is None:
+            # No video input, return original (this is OK - text-only training)
+            if model.offline_debug:
+                print(f"[Pose RoPE] No video input (video_grid_thw is None), returning original position_ids")
             return position_ids, mrope_position_deltas
+        
+        if model.selected_frames_poses is None:
+            # Video exists but no poses - this is an ERROR during training!
+            raise RuntimeError(
+                "[Pose RoPE ERROR] video_grid_thw exists but model.selected_frames_poses is None!\n"
+                "This means VGGT pose estimation was skipped during forward().\n"
+                "Possible causes:\n"
+                "1. video_tchw was not passed to forward() (check data_processor and collator)\n"
+                "2. video_tchw is empty or None in the batch\n"
+                "3. VGGT spatial_encoder failed during forward()\n"
+                "\n"
+                "Solution: Verify video_tchw is correctly extracted in preprocess_qwen_visual() and passed to model.forward()"
+            )
         
         # ==================== Step 3: Compute Pose Distance ====================
         # JJ: Reuse logic from Qwen2.5 implementation
@@ -487,7 +505,7 @@ def patch_qwen3_with_pose_rope(
                         position_ids[0, batch_idx, actual_positions] = pose_dist#.long()
         
         # ==================== Debug: Detailed Position IDs Printout ====================
-        if model.offline_debug or True:
+        if model.offline_debug:
         # if model.offline_debug:
             print(f"*"*20)
             print(f"Details During Prefill (Qwen3 PHW Pose RoPE):")
