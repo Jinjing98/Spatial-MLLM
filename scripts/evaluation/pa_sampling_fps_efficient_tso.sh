@@ -38,16 +38,29 @@ pwd
 BASE_DIR="${RESULTS_SAVE_ROOT}/vsibench"
 
 # Number of frames to sample
-NUM_FRAMES="${NUM_FRAMES:-16}"
-# NUM_FRAMES="${NUM_FRAMES:-8}"
+# NUM_FRAMES="${NUM_FRAMES:-64}"
+NUM_FRAMES="${NUM_FRAMES:-8}"
 
-# Sampling type: "fps" or "efficient"
-SAMPLING_TYPE="${SAMPLING_TYPE:-efficient}"
+# Sampling type: "fps", "efficient", "mergeaware_fps", or "mergeaware_efficient"
+SAMPLING_TYPE="${SAMPLING_TYPE:-mergeaware_fps}"
+# SAMPLING_TYPE="${SAMPLING_TYPE:-mergeaware_efficient}"
 
 # Predictions root (must exist, from sa_sampling.py output)
 # Example: sa_sampling_16f, sa_sampling_128f, etc.
 # Can be overridden with environment variable PREDICTIONS_ROOT
 PREDICTIONS_ROOT="${PREDICTIONS_ROOT:-${BASE_DIR}/sa_sampling_16f_single_video}"
+
+# ============================================================================
+# Temporal Merge Aware Sampling Parameters
+# ============================================================================
+# JJ : For mergeaware_fps and mergeaware_efficient modes
+# neighbor_mode: "before", "after" (default), or "random"
+NEIGHBOR_MODE="${NEIGHBOR_MODE:-random}"
+# index_step_size: Index step size for mergeaware modes (operates on 128-frame pool indices, default: 1)
+INDEX_STEP_SIZE="${INDEX_STEP_SIZE:-1}"
+# enforce_duplicate: Set to "--enforce_duplicate" to enable simple duplication (f1,f1,f2,f2,...)
+# ENFORCE_DUPLICATE="${ENFORCE_DUPLICATE:---enforce_duplicate}"  # 启用
+ENFORCE_DUPLICATE="${ENFORCE_DUPLICATE:-}"  # 禁用（默认）
 
 # ============================================================================
 # FPS Sampling Parameters
@@ -98,6 +111,20 @@ elif [[ "$SAMPLING_TYPE" == "efficient" ]]; then
     echo "Normalization:  ${EFFICIENT_NORMALIZATION}"
     echo "Diagonal prio:  ${EFFICIENT_DIAGONAL_PRIORITY}"
     echo "Starting mode:  ${EFFICIENT_STARTING_MODE}"
+elif [[ "$SAMPLING_TYPE" == "mergeaware_fps" ]]; then
+    echo "Distance mode:  ${FPS_DISTANCE_MODE}"
+    echo "Starting mode:  ${FPS_STARTING_MODE}"
+    echo "Neighbor mode:  ${NEIGHBOR_MODE}"
+    echo "Index step:     ${INDEX_STEP_SIZE}"
+    echo "Enforce dup:    ${ENFORCE_DUPLICATE:-disabled}"
+elif [[ "$SAMPLING_TYPE" == "mergeaware_efficient" ]]; then
+    echo "Sampling mode:  ${EFFICIENT_SAMPLING_MODE}"
+    echo "Normalization:  ${EFFICIENT_NORMALIZATION}"
+    echo "Diagonal prio:  ${EFFICIENT_DIAGONAL_PRIORITY}"
+    echo "Starting mode:  ${EFFICIENT_STARTING_MODE}"
+    echo "Neighbor mode:  ${NEIGHBOR_MODE}"
+    echo "Index step:     ${INDEX_STEP_SIZE}"
+    echo "Enforce dup:    ${ENFORCE_DUPLICATE:-disabled}"
 fi
 echo "Visualization:  ${VISUALIZE_SAMPLING:-disabled}"
 echo "Dry run:        ${DRY_RUN:-disabled}"
@@ -142,6 +169,40 @@ run_sampling() {
                 $VISUALIZE_SAMPLING \
                 $PLOT_POSE_ANALYSIS \
                 $DRY_RUN
+        elif [[ "$SAMPLING_TYPE" == "mergeaware_fps" ]]; then
+            python src/sampling/pa_sampling.py \
+                --video_path "$VIDEO_PATH" \
+                --model_path "${MODELS_ROOT}/Spatial-MLLM/checkpoints/VGGT-1B" \
+                --output_folder "${BASE_DIR}/${SAMPLING_TYPE}_sampling_${NUM_FRAMES}f_single_video/${dataset}" \
+                --num_frames $NUM_FRAMES \
+                --sampling_type "$SAMPLING_TYPE" \
+                --predictions_root "${PREDICTIONS_ROOT}" \
+                --fps_distance_mode "$FPS_DISTANCE_MODE" \
+                --fps_starting_mode "$FPS_STARTING_MODE" \
+                --neighbor_mode "$NEIGHBOR_MODE" \
+                --index_step_size $INDEX_STEP_SIZE \
+                $ENFORCE_DUPLICATE \
+                $VISUALIZE_SAMPLING \
+                $PLOT_POSE_ANALYSIS \
+                $DRY_RUN
+        elif [[ "$SAMPLING_TYPE" == "mergeaware_efficient" ]]; then
+            python src/sampling/pa_sampling.py \
+                --video_path "$VIDEO_PATH" \
+                --model_path "${MODELS_ROOT}/Spatial-MLLM/checkpoints/VGGT-1B" \
+                --output_folder "${BASE_DIR}/${SAMPLING_TYPE}_sampling_${NUM_FRAMES}f_single_video/${dataset}" \
+                --num_frames $NUM_FRAMES \
+                --sampling_type "$SAMPLING_TYPE" \
+                --predictions_root "${PREDICTIONS_ROOT}" \
+                --efficient_sampling_mode "$EFFICIENT_SAMPLING_MODE" \
+                --efficient_normalization "$EFFICIENT_NORMALIZATION" \
+                --efficient_diagonal_priority $EFFICIENT_DIAGONAL_PRIORITY \
+                --efficient_starting_mode "$EFFICIENT_STARTING_MODE" \
+                --neighbor_mode "$NEIGHBOR_MODE" \
+                --index_step_size $INDEX_STEP_SIZE \
+                $ENFORCE_DUPLICATE \
+                $VISUALIZE_SAMPLING \
+                $PLOT_POSE_ANALYSIS \
+                $DRY_RUN
         fi
     else
         # Batch mode
@@ -172,6 +233,40 @@ run_sampling() {
                 --efficient_normalization "$EFFICIENT_NORMALIZATION" \
                 --efficient_diagonal_priority $EFFICIENT_DIAGONAL_PRIORITY \
                 --efficient_starting_mode "$EFFICIENT_STARTING_MODE" \
+                $VISUALIZE_SAMPLING \
+                $PLOT_POSE_ANALYSIS \
+                $DRY_RUN
+        elif [[ "$SAMPLING_TYPE" == "mergeaware_fps" ]]; then
+            python src/sampling/pa_sampling.py \
+                --video_folder "${BASE_DIR}/${dataset}" \
+                --model_path "${MODELS_ROOT}/Spatial-MLLM/checkpoints/VGGT-1B" \
+                --output_folder "${BASE_DIR}/${SAMPLING_TYPE}_sampling_${NUM_FRAMES}f/${dataset}" \
+                --num_frames $NUM_FRAMES \
+                --sampling_type "$SAMPLING_TYPE" \
+                --predictions_root "${PREDICTIONS_ROOT}/${dataset}" \
+                --fps_distance_mode "$FPS_DISTANCE_MODE" \
+                --fps_starting_mode "$FPS_STARTING_MODE" \
+                --neighbor_mode "$NEIGHBOR_MODE" \
+                --index_step_size $INDEX_STEP_SIZE \
+                $ENFORCE_DUPLICATE \
+                $VISUALIZE_SAMPLING \
+                $PLOT_POSE_ANALYSIS \
+                $DRY_RUN
+        elif [[ "$SAMPLING_TYPE" == "mergeaware_efficient" ]]; then
+            python src/sampling/pa_sampling.py \
+                --video_folder "${BASE_DIR}/${dataset}" \
+                --model_path "${MODELS_ROOT}/Spatial-MLLM/checkpoints/VGGT-1B" \
+                --output_folder "${BASE_DIR}/${SAMPLING_TYPE}_sampling_${NUM_FRAMES}f/${dataset}" \
+                --num_frames $NUM_FRAMES \
+                --sampling_type "$SAMPLING_TYPE" \
+                --predictions_root "${PREDICTIONS_ROOT}/${dataset}" \
+                --efficient_sampling_mode "$EFFICIENT_SAMPLING_MODE" \
+                --efficient_normalization "$EFFICIENT_NORMALIZATION" \
+                --efficient_diagonal_priority $EFFICIENT_DIAGONAL_PRIORITY \
+                --efficient_starting_mode "$EFFICIENT_STARTING_MODE" \
+                --neighbor_mode "$NEIGHBOR_MODE" \
+                --index_step_size $INDEX_STEP_SIZE \
+                $ENFORCE_DUPLICATE \
                 $VISUALIZE_SAMPLING \
                 $PLOT_POSE_ANALYSIS \
                 $DRY_RUN
