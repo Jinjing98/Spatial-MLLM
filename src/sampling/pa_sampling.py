@@ -1144,8 +1144,8 @@ if __name__ == "__main__":
     
     # Sampling strategy
     parser.add_argument("--sampling_type", type=str, default="fps", 
-                        choices=["fps", "efficient", "sa", "uniform", "mergeaware_uniform", "mergeaware_sa"], 
-                        help="Type of sampling: 'fps' (FPS in SE(3)), 'efficient' (2D farness), 'sa'/'uniform'/merge* (use sa_sampling.py)")
+                        choices=["fps", "efficient", "mergeaware_fps", "mergeaware_efficient", "sa", "uniform", "mergeaware_uniform", "mergeaware_sa"], 
+                        help="Type of sampling: 'fps' (FPS in SE(3)), 'efficient' (2D farness), 'mergeaware_fps', 'mergeaware_efficient', or 'sa'/'uniform'/merge* (use sa_sampling.py)")
     
     # Pose source (TODO: extend to support different sample_pose_source and vis_pose_source)
     # Currently: sample_pose_source == vis_pose_source for simplicity
@@ -1197,19 +1197,21 @@ if __name__ == "__main__":
     parser.add_argument("--fid_step_size", type=int, default=30,
                         help="[Merge-aware uniform only] Frame ID step size")
     parser.add_argument("--index_step_size", type=int, default=1,
-                        help="[Merge-aware SA only] Index step size")
+                        help="[Merge-aware SA/FPS/Efficient] Index step size for 128-frame pool")
+    parser.add_argument("--enforce_duplicate", action="store_true", default=False,
+                        help="[Merge-aware only] Enforce simple duplication (f1,f1,f2,f2,...) instead of neighbor frame logic")
     
     args = parser.parse_args()
     
     # ========================================================================
-    # Redirect SA/Uniform/Merge-aware to sa_sampling.py
+    # Redirect SA/Uniform/Merge-aware-SA/Uniform to sa_sampling.py
     # ========================================================================
     if args.sampling_type in ["sa", "uniform", "mergeaware_uniform", "mergeaware_sa"]:
         print("\n" + "="*80)
         print(f"❌ ERROR: sampling_type='{args.sampling_type}' should use sa_sampling.py")
         print("="*80)
         print(f"\npa_sampling.py is designed for FPS/Efficient sampling only.")
-        print(f"For SA/Uniform/Merge-aware sampling, please use:")
+        print(f"For SA/Uniform/Merge-aware-SA/Uniform sampling, please use:")
         print(f"\n  python src/sampling/sa_sampling.py \\")
         print(f"    --sampling_type {args.sampling_type} \\")
         print(f"    --num_frames {args.num_frames} \\")
@@ -1337,6 +1339,67 @@ if __name__ == "__main__":
             )
             method_name = f"Efficient ({args.efficient_sampling_mode})"
         
+        elif args.sampling_type == 'mergeaware_fps':
+            # JJ: Temporal merge aware FPS sampling
+            n_prime = args.num_frames // 2
+            initial_selected_indices = run_fps_sampling(
+                poses=poses,
+                num_samples=n_prime,
+                distance_mode=args.fps_distance_mode,
+                starting_mode=args.fps_starting_mode,
+                reorth_rot=True,
+                verbose=True
+            )
+            print(f"  Initial FPS selected {n_prime} frames (pool indices): {initial_selected_indices}")
+            
+            # Add neighbor frames or duplicate
+            if args.enforce_duplicate:
+                selected_indices = []
+                for idx in initial_selected_indices:
+                    selected_indices.extend([idx, idx])
+                print(f"  Enforce duplicate mode: each frame duplicated")
+            else:
+                selected_indices = add_neighbor_frames(
+                    initial_selected_indices,
+                    args.neighbor_mode,
+                    args.index_step_size,
+                    poses.shape[0]  # total frames in 128-pool
+                )
+            print(f"  Final indices after neighbor addition: {selected_indices}")
+            method_name = f"MergeAware-FPS ({args.fps_distance_mode})"
+        
+        elif args.sampling_type == 'mergeaware_efficient':
+            # JJ: Temporal merge aware Efficient sampling
+            n_prime = args.num_frames // 2
+            initial_selected_indices = run_efficient_sampling(
+                poses=poses,
+                num_samples=n_prime,
+                sampling_mode=args.efficient_sampling_mode,
+                normalization=args.efficient_normalization,
+                diagonal_priority=args.efficient_diagonal_priority,
+                starting_mode=args.efficient_starting_mode,
+                reorth_rot=True,
+                grid_density=1.5,
+                verbose=True
+            )
+            print(f"  Initial Efficient selected {n_prime} frames (pool indices): {initial_selected_indices}")
+            
+            # Add neighbor frames or duplicate
+            if args.enforce_duplicate:
+                selected_indices = []
+                for idx in initial_selected_indices:
+                    selected_indices.extend([idx, idx])
+                print(f"  Enforce duplicate mode: each frame duplicated")
+            else:
+                selected_indices = add_neighbor_frames(
+                    initial_selected_indices,
+                    args.neighbor_mode,
+                    args.index_step_size,
+                    poses.shape[0]  # total frames in 128-pool
+                )
+            print(f"  Final indices after neighbor addition: {selected_indices}")
+            method_name = f"MergeAware-Efficient ({args.efficient_sampling_mode})"
+        
         # JJ: Sort selected indices to ensure temporal order
         selected_indices = sorted(selected_indices)
         
@@ -1373,12 +1436,25 @@ if __name__ == "__main__":
             original_frame_ids = [int(frame_indices_vggt[i]) for i in selected_indices]
             print(f"  Mapped to original frame IDs: {original_frame_ids}")
             
-            # Extract and save frames
+            # JJ: Handle duplicate frames for mergeaware modes
             saved_count = 0
+            frame_occurrence_count = {}
             for orig_idx in original_frame_ids:
                 frame = vr[orig_idx].asnumpy()
                 image = Image.fromarray(frame)
-                frame_filename = f"{video_name}_frame_{orig_idx:06d}.png"
+                
+                # Track occurrence count for duplicate frames
+                if orig_idx not in frame_occurrence_count:
+                    frame_occurrence_count[orig_idx] = 0
+                else:
+                    frame_occurrence_count[orig_idx] += 1
+                
+                # Add suffix for duplicate frames
+                if frame_occurrence_count[orig_idx] == 0:
+                    frame_filename = f"{video_name}_frame_{orig_idx:06d}.png"
+                else:
+                    frame_filename = f"{video_name}_frame_{orig_idx:06d}_{frame_occurrence_count[orig_idx] + 1}.png"
+                
                 frame_path = output_dir / frame_filename
                 image.save(frame_path)
                 saved_count += 1
@@ -1410,6 +1486,34 @@ if __name__ == "__main__":
                 "normalization": args.efficient_normalization,
                 "diagonal_priority": args.efficient_diagonal_priority,
                 "starting_mode": args.efficient_starting_mode,
+            }
+        elif args.sampling_type == 'mergeaware_fps':
+            # JJ: Add mergeaware metadata
+            initial_selected_indices = selected_indices[::2] if args.enforce_duplicate else [
+                selected_indices[i] for i in range(0, len(selected_indices), 2)
+            ]
+            metadata["mergeaware_fps_settings"] = {
+                "distance_mode": args.fps_distance_mode,
+                "starting_mode": args.fps_starting_mode,
+                "neighbor_mode": args.neighbor_mode,
+                "index_step_size": args.index_step_size,
+                "enforce_duplicate": args.enforce_duplicate,
+                "initial_selected_pool_indices": initial_selected_indices,
+            }
+        elif args.sampling_type == 'mergeaware_efficient':
+            # JJ: Add mergeaware metadata
+            initial_selected_indices = selected_indices[::2] if args.enforce_duplicate else [
+                selected_indices[i] for i in range(0, len(selected_indices), 2)
+            ]
+            metadata["mergeaware_efficient_settings"] = {
+                "sampling_mode": args.efficient_sampling_mode,
+                "normalization": args.efficient_normalization,
+                "diagonal_priority": args.efficient_diagonal_priority,
+                "starting_mode": args.efficient_starting_mode,
+                "neighbor_mode": args.neighbor_mode,
+                "index_step_size": args.index_step_size,
+                "enforce_duplicate": args.enforce_duplicate,
+                "initial_selected_pool_indices": initial_selected_indices,
             }
         
         metadata_path = output_dir / "selected_frames.json"
