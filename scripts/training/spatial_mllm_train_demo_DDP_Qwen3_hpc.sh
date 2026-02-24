@@ -16,7 +16,8 @@
 set -euo pipefail
 
 source /software/rapids/r24.10/Anaconda3/2024.02-1/etc/profile.d/conda.sh
-conda activate /data/horse/ws/jixu233b-3d_ws/envs/spatial-mllm
+# conda activate /data/horse/ws/jixu233b-3d_ws/envs/spatial-mllm
+conda activate /data/horse/ws/jixu233b-3d_ws/envs/transformers_v5
 module load CUDA/12.4.0
 cd $SLURM_SUBMIT_DIR
 
@@ -39,7 +40,7 @@ DATASET_ROOT="/data/horse/ws/jixu233b-metadata_ws/datasets/ViCA-322K"
 # Use 50% of ViCA data
 DATASETS="vica_322k_all%50"
 DATASETS="vica_322k_base%50"
-DATASETS="vica_322k_base"
+# DATASETS="vica_322k_base"
 # DATASETS="vica_322k_arkitscenes"  # All ARKitScenes data
 
 # DATASET_ROOT="/data/horse/ws/jixu233b-metadata_ws/datasets/vsibench"  # Dataset root directory
@@ -57,6 +58,7 @@ VIDEO_MIN_FRAMES=16 # default 16
 VIDEO_FRAME_FPS=4 # default 4
 GRADIENT_CHECKPOINTING=True # default False
 MODEL_TYPE="custom-spatial-mllm" #"custom-spatial-mllm" # spatial-mllm
+MODEL_TYPE="spatial-mllm-qwen3" 
 # MODEL_TYPE="spatial-mllm" #"custom-spatial-mllm" # spatial-mllm
 PRETRAINED_MODEL_NAME_OR_PATH="Qwen/Qwen2.5-VL-3B-Instruct"
 # RUN_NAME_APPENDIX="_PTHW_1st_skipCnc_2x8_hpc"
@@ -68,15 +70,20 @@ RUN_NAME_APPENDIX="_PTHW_medoid_882424BUGFIXED_ACTUAL_skipCnc_2x8_hpc"
 RUN_NAME_APPENDIX="_PTHW_medoid_882424BUGFIXED_ACTUAL_skipCnc_2x8_hpc_100ViCA"
 # RUN_NAME_APPENDIX="_baseline_spmllm_2x8_hpc"
 # RUN_NAME_APPENDIX="_baseline_qwen25_skipCnc_2x8_hpc"
+
+PRETRAINED_MODEL_NAME_OR_PATH="Qwen/Qwen3-VL-2B-Instruct"
+RUN_NAME_APPENDIX="_qwen3_phw_1st_2x8_hpc_50ViCA"
+RUN_NAME_APPENDIX="_qwen3_2x8_hpc_50ViCA"
+
 # JJ: 4D Pose RoPE config (only for custom-spatial-mllm)
 USE_POSE_ROPE=True  # Set to True to enable 4D Pose-aware RoPE
-POSE_ENC_TYPE="PTHW"  # Pose encoding type (only 'PTHW' supported)
-MROPE_SECTION="8 8 24 24"  # Custom mrope_section (e.g., "16 24 24" for 3D or "8 8 24 24" for 4D). Leave empty for default.
-                  # Examples: 
-                  # - For PTHW (4D): MROPE_SECTION="8 8 24 24"
-                  # - For PHW/THW (3D): MROPE_SECTION="16 24 24"
-
-
+USE_POSE_ROPE=False  # Set to True to enable 4D Pose-aware RoPE
+POSE_ENC_TYPE="PHW" 
+MROPE_SECTION="24 20 20"  # Custom mrope_section for Qwen3 (default: "24 20 20" for 3D PHW)
+                  # Note: Qwen3 uses 3D mRoPE with default [24, 20, 20] for head_dim=128
+                  # - P/T: 24 dims
+                  # - H: 20 dims
+                  # - W: 20 dims
 # Distributed training configuration
 MASTER_ADDR=${MASTER_ADDR:-"127.0.0.1"}
 MASTER_PORT=${MASTER_PORT:-$(shuf -i 20001-29999 -n 1)}
@@ -90,9 +97,6 @@ USE_DEEPSPEED=False  # Set to True to enable DeepSpeed
 # model_type=spatial-mllm
 # vggt_checkpoints_path=checkpoints/VGGT-1B/model.safetensors
 vggt_checkpoints_path="${PRETRAINED_CKPT_ROOT}checkpoints/VGGT-1B/model.safetensors"
-spatial_embeds_layer_idx=-1
-connector_type=mlp_add 
-# pretrained_model_name_or_path=Qwen/Qwen2.5-VL-3B-Instruct  # Using HuggingFace model ID
 
 # Training hyperparameters
 lr=7e-6
@@ -103,7 +107,7 @@ max_grad_norm=1.0
 # grad_accum_steps=8
 
 # Training entry point
-entry_file=src/qwenvl/train/train_qwen.py
+entry_file=src/custom_qwen3vl/qwenvl/train/train_qwen.py
 
 # Dataset configuration
 # datasets="spatial_mllm_mix_133k,route_plan_scannet_2k"
@@ -127,15 +131,15 @@ logfile="${output_dir}/$(date +'%Y%m%d_%H%M%S')_train.log"
 
 # Training arguments
 # JJ : Removed --deepspeed for native PyTorch single GPU training
+    # --spatial_embeds_layer_idx ${spatial_embeds_layer_idx} \
+    # --tune_mm_connector False \
 args="
     --model_type ${MODEL_TYPE} \
     --vggt_checkpoints_path ${vggt_checkpoints_path} \
-    --spatial_embeds_layer_idx ${spatial_embeds_layer_idx} \
     --pretrained_model_name_or_path "${PRETRAINED_MODEL_NAME_OR_PATH}" \
     --dataset_use ${DATASETS} \
     --tune_mm_vision False \
     --tune_mm_spatial_encoder False \
-    --tune_mm_connector False \
     --tune_mm_llm True \
     --bf16 \
     --output_dir ${output_dir} \
@@ -163,9 +167,11 @@ args="
     --model_max_length 8192 \
     --gradient_checkpointing ${GRADIENT_CHECKPOINTING} \
     --dataloader_num_workers ${NUM_WORKERS} \
-    --run_name ${run_name}"
+    --run_name ${run_name} \
+    --report_to wandb"
     #  \
     # --report_to wandb"
+    # --report_to none"
 
 # JJ: Add Pose RoPE args if enabled (only for custom-spatial-mllm)
 if [ "$USE_POSE_ROPE" = "True" ] || [ "$USE_POSE_ROPE" = "true" ]; then
@@ -174,9 +180,9 @@ if [ "$USE_POSE_ROPE" = "True" ] || [ "$USE_POSE_ROPE" = "true" ]; then
     # Add mrope_section if provided
     if [ -n "$MROPE_SECTION" ]; then
         args="$args --mrope_section ${MROPE_SECTION}"
-        echo "[Training] 4D Pose RoPE enabled: pose_enc_type=${POSE_ENC_TYPE}, mrope_section=${MROPE_SECTION}"
+        echo "[Training] Qwen3 Pose RoPE enabled: pose_enc_type=${POSE_ENC_TYPE}, mrope_section=${MROPE_SECTION}"
     else
-        echo "[Training] 4D Pose RoPE enabled: pose_enc_type=${POSE_ENC_TYPE} (using default mrope_section)"
+        echo "[Training] Qwen3 Pose RoPE enabled: pose_enc_type=${POSE_ENC_TYPE} (using default mrope_section)"
     fi
 fi
 

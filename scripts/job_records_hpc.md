@@ -11,6 +11,46 @@ fot HW style, we extend with P.
 -samples from other sampling stategies
 -base PE format: THW and HW
 
+24.02
+TODO:
+train a spmllm wo connector model for fair comparision?
+we compete with standard spmllm traning to show that we only need pose?
+
+23.02 
+train: qwen3 PHW_1st vs qwen3
+3002675 3002421 3001694 _qwen3_phw_1st_2x8_hpc_50ViCA
+3002955 _qwen3_2x8_hpc_50ViCA
+eval: qwen3+PHW_1st on effi
+3001913
+3001918
+3001919
+
+8 16 32
+eval sft model
+3002689 -PTHW1st-skipCnc-50k-sft
+3002697 -spmllm-baseline-50k-sft
+
+2995208 train100 _PTHW_medoid_882424BUGFIXED_ACTUAL_skipCnc_2x8_hpc_100ViCA
+TODO: qwen3 PHW
+TODO: online trace selcted frame n reapated
+TODO: time merge set to 1? hwo to fit in story?
+
+
+EVAL: PHW only+effi+sp mllm(with connector)
+EVAL: QWEN3 enforce repeat
+2991093
+EVAL:PTHW+effi+sp mllm(with connector)
+2991090 2991091 2991092 1st
+2991088 modroid
+EVAL: PHW?
+
+TRAIN:PTHW
+
+2990609 _PTHW_1st_882424BUGFIXED_ACTUAL_skipCnc_2x8_hpc
+2991085 _PTHW_medoid_882424BUGFIXED_ACTUAL_skipCnc_2x8_hpc
+TRAIN OTHER FREQ ALLOCATION?
+
+
 22.02
 offline reorder the index in : efficient and fps--n reeval all
 duplacate time sa as justify
@@ -48,12 +88,14 @@ eval:efficient_sampling_v0_hybrid
 offline reorder the index in : efficient and fps
 RUN:
 train: pica basic-50
+2978340 nan X2978135 _baseline_spmllm_2x8_hpc: -spmllm
 ours: no connector. just PTHW.
+2990609 _PTHW_1st_882424BUGFIXED_ACTUAL_skipCnc_2x8_hpc
+
+#PTHW all wrong having bug of freq allocation
 2984046 _PTHW_1st_ACTUAL_skipCnc_2x8_hpc -ours spmllm: PTHW 1st  --mm_connector false ; skip_connector True
 2984048 _PTHW_medoid_ACTUAL_skipCnc_2x8_hpc -ours spmllm: PTHW 1st   --mm_connector false ; skip_connector True
-
 2978337 _PTHW_medoid_skipCnc_2x8_hpc -ours spmllm: PTHW mdroid --infact still USE CONNECTOR
-2978340 nan X2978135 _baseline_spmllm_2x8_hpc: -spmllm
 (stoped)2978339 2978132 _PTHW_1st_skipCnc_2x8_hpc -ours spmllm: PTHW 1st  ---infact still USE CONNECTOR
 X 2978136 _baseline_qwen25_skipCnc_2x8_hpc: -qwen2.5 
 
