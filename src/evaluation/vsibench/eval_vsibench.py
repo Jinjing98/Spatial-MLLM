@@ -120,7 +120,7 @@ def prepare_chat_batch(
     prompts_text_copy = prompts_text.copy()
 
     # JJ : Split vision processing by model type (qwen3-vl needs extract_vision_info + gen_videos_metadata)
-    if model_type == "qwen3-vl":
+    if model_type in ["qwen3-vl", "spatial-mllm-qwen3"]:
         from qwen_vl_utils import extract_vision_info
         video_inputs = []
         image_inputs = []
@@ -171,6 +171,9 @@ def prepare_chat_batch(
     elif "custom-spatial-mllm" == model_type:
         # JJ
         batch = prepare_spatial_mllm_inputs_with_framesid(batch, video_inputs, image_inputs, batch_selected_frames)
+    elif "spatial-mllm-qwen3" == model_type:
+        # JJ : spatial-mllm-qwen3 needs tchw for pose computation
+        batch = prepare_spatial_mllm_inputs(batch, video_inputs, image_inputs)
     elif model_type in ["qwen2.5-vl", "qwen3-vl"]:
         pass  # JJ : No special batch preparation needed
     else:
@@ -392,7 +395,7 @@ def evaluate_vsibench(vsi_data, model_type, model_path, batch_size, video_dir, o
     # JJ: load model and processor with customized use_visual/use_geo
     model, processor = load_model_and_processor(model_type, model_path, use_visual=use_visual, use_geo=use_geo)
     
-    # 🆕 NEW: Apply Pose RoPE monkey patch for custom-spatial-mllm
+    # 🆕 NEW: Apply Pose RoPE monkey patch for custom-spatial-mllm (Qwen2.5)
     if model_type == "custom-spatial-mllm" and use_pose_rope:
         from src.custom_qwenvl.model.custom_spatial_mllm_pose_rope import patch_model_with_pose_rope
         
@@ -448,6 +451,35 @@ def evaluate_vsibench(vsi_data, model_type, model_path, batch_size, video_dir, o
             print(f"[Evaluation]    Checkpoint config: {model.config.pose_rope_config}")
             print(f"[Evaluation]    Consider using --use_pose_rope to match training configuration")
         print(f"[Evaluation] ℹ️  Using standard 3D mRoPE (T+H+W)")
+    
+    # 🆕 NEW: Apply Pose RoPE monkey patch for spatial-mllm-qwen3
+    elif model_type == "spatial-mllm-qwen3" and use_pose_rope:
+        assert pose_enc_type == "PHW", "Qwen3 only supports PHW pose encoding type"
+        
+        from src.custom_qwen3vl.model.spatial_mllm_qwen3_pose_rope import patch_qwen3_with_pose_rope
+        
+        print(f"[Evaluation] 🔧 Applying Qwen3 Pose RoPE configuration:")
+        print(f"[Evaluation]    - pose_enc_type: {pose_enc_type}")
+        print(f"[Evaluation]    - mrope_section: {mrope_section if mrope_section else 'default [24, 20, 20]'}")
+        
+        # Validate config consistency
+        if hasattr(model.config, 'pose_rope_config'):
+            saved_config = model.config.pose_rope_config
+            print(f"[Evaluation] 📋 Detected saved Pose RoPE config:")
+            print(f"[Evaluation]    - pose_enc_type: {saved_config.get('pose_enc_type')}")
+            print(f"[Evaluation]    - mrope_section: {saved_config.get('mrope_section')}")
+        
+        model = patch_qwen3_with_pose_rope(
+            model,
+            use_pose_rope=True,
+            pose_enc_type=pose_enc_type,
+            mrope_section=mrope_section,
+        )
+        
+        actual_mrope_section = model.config.text_config.rope_parameters.get("mrope_section", "not found")
+        print(f"[Evaluation] 📊 Final mrope_section: {actual_mrope_section}")
+    elif model_type == "spatial-mllm-qwen3" and not use_pose_rope:
+        print(f"[Evaluation] ℹ️  Using Qwen3 standard 3D mRoPE (T+H+W)")
     
     final_output = []
 

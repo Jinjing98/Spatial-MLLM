@@ -93,6 +93,25 @@ def load_model_and_processor(model_type: str, model_path: str, use_visual=None, 
         # processor = AutoProcessor.from_pretrained(model_path, use_fast=True)
         processor = Qwen3VLProcessor.from_pretrained(model_path, use_fast=True)
         return model, processor
+    
+    elif model_type == "spatial-mllm-qwen3":
+        from transformers import Qwen3VLProcessor
+        from src.custom_qwen3vl.model.spatial_mllm_qwen3 import SpatialMLLMQwen3ForConditionalGeneration
+        
+        # JJ: CRITICAL FIX for meta tensor issue with VGGT
+        # Step 1: Load model WITHOUT initializing VGGT (to avoid meta tensor .item() calls)
+        model = SpatialMLLMQwen3ForConditionalGeneration.from_pretrained(
+            model_path,
+            torch_dtype="bfloat16",
+            device_map="cuda",  # ← OK to use now, VGGT not initialized yet
+            attn_implementation="flash_attention_2",
+        )
+        
+        # Step 2: Initialize VGGT AFTER model is on real device
+        model.init_spatial_encoder()
+        
+        processor = Qwen3VLProcessor.from_pretrained(model_path, use_fast=True)
+        return model, processor
 
     raise ValueError(f"Unknown model type: {model_type}")
 
@@ -272,7 +291,7 @@ def prepare_spatial_mllm_inputs(batch, video_inputs, image_inputs):
 
 
     print("--------------------------------")
-    print('Updated batch keys in spatial mllm batch:')
+    print('Updated batch keys in spatial mllm batch--used in VGGT:')
     print(f"video_tchw[0] shape: {video_tchw[0].shape}")
     print(f"image_tchw: {image_tchw}")
     print("--------------------------------")
