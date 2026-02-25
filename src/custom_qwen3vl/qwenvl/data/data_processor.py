@@ -230,7 +230,9 @@ def preprocess_qwen_visual(
     # JJ: Use Qwen3 official method to get video_tchw (consistent with inference)
     # Step 1: Extract vision_infos from messages
     from qwen_vl_utils import extract_vision_info, fetch_video, fetch_image
-    
+    # from qwen_vl_utils import extract_vision_info, fetch_image
+    from .vision_process_relaxed import fetch_video_relaxed
+
     vision_infos = extract_vision_info(messages)
     
     image_inputs = []
@@ -242,7 +244,9 @@ def preprocess_qwen_visual(
         if "image" in vision_info or "image_url" in vision_info:
             image_inputs.append(fetch_image(vision_info))
         elif "video" in vision_info:
-            (video, raw_meta), _sample_fps = fetch_video(
+            # (video, raw_meta), _sample_fps = fetch_video(
+            # JJ: to use the video shorter than 16 frames as qwen2 dataloader does
+            (video, raw_meta), _sample_fps = fetch_video_relaxed(
                 vision_info, 
                 return_video_sample_fps=True, 
                 return_video_metadata=True
