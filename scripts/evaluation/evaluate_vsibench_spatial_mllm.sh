@@ -58,11 +58,24 @@ MODEL_TYPE="spatial-mllm"
 # MODEL_PATH="Qwen/Qwen2.5-VL-3B-Instruct"
 MODEL_TYPE="qwen3-vl"
 MODEL_PATH="Qwen/Qwen3-VL-2B-Instruct"
+<<<<<<< HEAD
 # MODEL_TYPE="spatial-mllm"
 # MODEL_TYPE="custom-spatial-mllm"
 # MODEL_PATH="Diankun/Spatial-MLLM-v1.1-Instruct-135K"
 MODEL_NAME=$(echo "$MODEL_PATH" | cut -d'/' -f2)
+=======
+MODEL_NAME_SUFFIX=""
+# MODEL_TYPE="spatial-mllm"
 
+MODEL_TYPE="spatial-mllm"
+MODEL_PATH="Diankun/Spatial-MLLM-v1.1-Instruct-135K"
+MODEL_NAME_SUFFIX=""
+
+
+# MODEL_NAME=$(echo "$MODEL_PATH" | cut -d'/' -f2)
+>>>>>>> b1c97b0 (latest eval bash status from hpc)
+
+MODEL_NAME="${MODEL_TYPE}${MODEL_NAME_SUFFIX}"
 
 
 
@@ -97,8 +110,13 @@ QUESTION_TYPES=("${QUESTION_TYPE_LIST[@]}") #all cases
 # QUESTION_TYPES=("${QUESTION_TYPE_LIST[6]}") #allo.
 
 # nframes=(None)
+<<<<<<< HEAD
 nframes=(8)
 # nframes=(16)
+=======
+# nframes=(8)
+nframes=(8 32)
+>>>>>>> b1c97b0 (latest eval bash status from hpc)
 # nframes=(32)
 # sample_fps=(None)
 # sample_fps=(1)

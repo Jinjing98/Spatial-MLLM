@@ -73,7 +73,7 @@ class CustomSpatialMLLMForConditionalGeneration(Qwen2_5_VLForConditionalGenerati
         # JJ: Manual control flag for connector fusion (set manually when training)
         # for effeciency if we only want PoseRoPE on qwen2.5VL model, not connector fusion
         self.skip_connector = True #used to train custom spatialmllm
-        self.skip_connector = False #used to eval spatialmllm
+        # self.skip_connector = False #used to eval spatialmllm
         print(f"[INFO] Force skip_connector = {self.skip_connector} in {config.model_type}")
 
         # NOTE JJ

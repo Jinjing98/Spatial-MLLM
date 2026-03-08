@@ -1,6 +1,10 @@
 datasets/
+<<<<<<< HEAD
 tmp/
 *.png
+=======
+*.tex
+>>>>>>> b1c97b0 (latest eval bash status from hpc)
 *.whl
 *.zip
 # Byte-compiled / optimized / DLL files

@@ -29,17 +29,24 @@ export NCCL_IB_DISABLE=1
 
 PRETRAINED_CKPT_ROOT="/data/horse/ws/jixu233b-metadata_ws/models/Spatial-MLLM/"
 
-# DATASET_ROOT="/data/horse/ws/jixu233b-metadata_ws/datasets/vsibench"  # Dataset root directory
-# DATASETS="spatial_mllm_mix_10_dbg" # default "spatial_mllm_mix_133k,route_plan_scannet_2k"
+DATASET_ROOT="/data/horse/ws/jixu233b-metadata_ws/datasets/vsibench"  # Dataset root directory
+DATASET_ROOT="/home/jixu233b/Projects/VLM_3D/SpatialMllmHallucinate/third_party/Spatial-MLLM/datasets/SPMLLM-DATA"  # Dataset root directory
+DATASETS="spatial_mllm_mix_133k,route_plan_scannet_2k" # default "spatial_mllm_mix_133k,route_plan_scannet_2k"
 
-DATASET_ROOT="/data/horse/ws/jixu233b-metadata_ws/datasets/SQA3D"  # Dataset root directory
-DATASETS="sqa3d_filtered_40k" # default "sqa3d_filtered_40k,sqa3d_filtered_40k_small"
+# DATASET_ROOT="/data/horse/ws/jixu233b-metadata_ws/datasets/SQA3D"  # Dataset root directory
+# DATASETS="sqa3d_filtered_40k" # default "sqa3d_filtered_40k,sqa3d_filtered_40k_small"
 
+<<<<<<< HEAD
 DATASET_ROOT="/data/horse/ws/jixu233b-metadata_ws/datasets/ViCA-322K"
 # Use 50% of ViCA data
 DATASETS="vica_322k_all%50"
 DATASETS="vica_322k_base%50"
 # DATASETS="vica_322k_arkitscenes"  # All ARKitScenes data
+=======
+# DATASET_ROOT="/data/horse/ws/jixu233b-metadata_ws/datasets/ViCA-322K"
+# DATASETS="vica_322k_base%50"
+# # DATASETS="vica_322k_base"
+>>>>>>> b1c97b0 (latest eval bash status from hpc)
 
 # DATASET_ROOT="/data/horse/ws/jixu233b-metadata_ws/datasets/vsibench"  # Dataset root directory
 # Export DATASET_ROOT for Python scripts (__init__.py) to use for data loading
@@ -55,18 +62,59 @@ VIDEO_MAX_FRAMES=16 # default 16
 VIDEO_MIN_FRAMES=16 # default 16
 VIDEO_FRAME_FPS=4 # default 4
 GRADIENT_CHECKPOINTING=True # default False
-MODEL_TYPE="custom-spatial-mllm" #"custom-spatial-mllm" # spatial-mllm
 # MODEL_TYPE="spatial-mllm" #"custom-spatial-mllm" # spatial-mllm
+MODEL_TYPE="custom-spatial-mllm" #"custom-spatial-mllm" # spatial-mllm
+# MODEL_TYPE="qwen2.5-vl" #"custom-spatial-mllm" # spatial-mllm
 PRETRAINED_MODEL_NAME_OR_PATH="Qwen/Qwen2.5-VL-3B-Instruct"
+
+
 # RUN_NAME_APPENDIX="_PTHW_1st_skipCnc_2x8_hpc"
 RUN_NAME_APPENDIX="_PTHW_medoid_skipCnc_2x8_hpc"
 # RUN_NAME_APPENDIX="_PTHW_1st_ACTUAL_skipCnc_2x8_hpc"
 # RUN_NAME_APPENDIX="_PTHW_medoid_ACTUAL_skipCnc_2x8_hpc"
+<<<<<<< HEAD
+=======
+RUN_NAME_APPENDIX="_PTHW_1st_882424BUGFIXED_ACTUAL_skipCnc_2x8_hpc"
+RUN_NAME_APPENDIX="_PTHW_medoid_882424BUGFIXED_ACTUAL_skipCnc_2x8_hpc"
+RUN_NAME_APPENDIX="_PTHW_medoid_882424BUGFIXED_ACTUAL_skipCnc_2x8_hpc_100ViCA"
+
+RUN_NAME_APPENDIX="_PTHW_1st_882424_skipCnc_sqa40k_hpc"
+# RUN_NAME_APPENDIX="_PTHW_medoid_882424_skipCnc_sqa40k_hpc"
+
+RUN_NAME_APPENDIX="_skipCnc_vicabase50_hpc"
+
+#Latest
+RUN_NAME_APPENDIX="_pthw1st_skipCnc_sp133krp2k"
+RUN_NAME_APPENDIX="_phw1st_skipCnc_sp133krp2k"
+RUN_NAME_APPENDIX="_baseline_skipCnc_sp133krp2k"
+RUN_NAME_APPENDIX="_baseline_sp133krp2k"
+# RUN_NAME_APPENDIX="_baseline_sp133krp2k"
+# RUN_NAME_APPENDIX="_qwen25_sp133krp2k"
+
+# TODO
+# RUN_NAME_APPENDIX="_pthw1st_vggtfuseCnc_sp133krp2k"
+
+
+>>>>>>> b1c97b0 (latest eval bash status from hpc)
 # RUN_NAME_APPENDIX="_baseline_spmllm_2x8_hpc"
 # RUN_NAME_APPENDIX="_baseline_qwen25_skipCnc_2x8_hpc"
 # JJ: 4D Pose RoPE config (only for custom-spatial-mllm)
 USE_POSE_ROPE=True  # Set to True to enable 4D Pose-aware RoPE
+<<<<<<< HEAD
 POSE_ENC_TYPE="PTHW"  # Pose encoding type (only 'PTHW' supported)
+=======
+USE_POSE_ROPE=False
+TUNE_MM_CONNECTOR=True
+# TUNE_MM_CONNECTOR=False
+# POSE_ENC_TYPE="PTHW"  # Pose encoding type (only 'PTHW' supported)
+# MROPE_SECTION="8 8 24 24"  # Custom mrope_section (e.g., "16 24 24" for 3D or "8 8 24 24" for 4D). Leave empty for default.
+POSE_ENC_TYPE="PHW"  # Pose encoding type (only 'PTHW' supported)
+MROPE_SECTION="16 24 24"  # Custom mrope_section (e.g., "16 24 24" for 3D or "8 8 24 24" for 4D). Leave empty for default.
+                  # Examples: 
+                  # - For PTHW (4D): MROPE_SECTION="8 8 24 24"
+                  # - For PHW/THW (3D): MROPE_SECTION="16 24 24"
+
+>>>>>>> b1c97b0 (latest eval bash status from hpc)
 
 # Distributed training configuration
 MASTER_ADDR=${MASTER_ADDR:-"127.0.0.1"}
@@ -95,6 +143,7 @@ max_grad_norm=1.0
 
 # Training entry point
 entry_file=src/qwenvl/train/train_qwen.py
+# entry_file_dataset_dbg=src/qwenvl/train/train_qwen_dataset_dbg.py
 
 # Dataset configuration
 # datasets="spatial_mllm_mix_133k,route_plan_scannet_2k"
@@ -126,7 +175,7 @@ args="
     --dataset_use ${DATASETS} \
     --tune_mm_vision False \
     --tune_mm_spatial_encoder False \
-    --tune_mm_connector False \
+    --tune_mm_connector ${TUNE_MM_CONNECTOR} \
     --tune_mm_llm True \
     --bf16 \
     --output_dir ${output_dir} \
@@ -165,8 +214,8 @@ if [ "$USE_POSE_ROPE" = "True" ] || [ "$USE_POSE_ROPE" = "true" ]; then
 fi
 
 # Launch training (native PyTorch without DeepSpeed)
-# python ${entry_file} ${args} 2>&1 | tee -a "${logfile}"
 torchrun --nproc_per_node=${NPROC_PER_NODE} \
          --master_addr=${MASTER_ADDR} \
          --master_port=${MASTER_PORT} \
          ${entry_file} ${args} 2>&1 | tee -a "${logfile}"
+# python ${entry_file_dataset_dbg} ${args} 2>&1 | tee -a "${logfile}"
