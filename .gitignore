@@ -1,5 +1,6 @@
 tmp/
 datasets/
+*.tex
 *.whl
 *.zip
 # Byte-compiled / optimized / DLL files

@@ -60,31 +60,76 @@ QUESTION_TYPE_LIST=(
     "room_size_estimation"
     "route_planning" # missing in previous all
 )
+# //////////SFT MODEL//////////////////
+MODEL_TYPE="custom-spatial-mllm"
+MODEL_PATH="${SFT_MODELS_ROOT}/20260216_183216_spatial-mllm-sft_2x8"
+MODEL_NAME_SUFFIX="-sqa3d40k-sft"
+
+MODEL_TYPE="custom-spatial-mllm"
+MODEL_PATH="${SFT_MODELS_ROOT}/20260225_154200_spatial-mllm-sft_pthw1st_skipCnc_sp133krp2k"
+MODEL_NAME_SUFFIX="-skipCnc-pthw882424-sp133krp2k"
+MODEL_PATH="${SFT_MODELS_ROOT}/20260225_205939_spatial-mllm-sft_phw1st_skipCnc_sp133krp2k"
+MODEL_NAME_SUFFIX="-skipCnc-phw162424-sp133krp2k"
+MODEL_PATH="${SFT_MODELS_ROOT}/20260301_121711_spatial-mllm-sft_baseline_skipCnc_sp133krp2k"
+MODEL_NAME_SUFFIX="-baseline-skipCnc-sp133krp2k"
+MODEL_PATH="${SFT_MODELS_ROOT}/20260301_135514_spatial-mllm-sft_baseline_sp133krp2k"
+MODEL_NAME_SUFFIX="-baseline-sp133krp2k"
 
 # MODEL_TYPE="custom-spatial-mllm"
-# MODEL_PATH="${SFT_MODELS_ROOT}/20260216_183216_spatial-mllm-sft_2x8"
-# MODEL_NAME_SUFFIX="-sqa3d40k-sft"\
+# MODEL_PATH="${SFT_MODELS_ROOT}/20260225_121046_spatial-mllm-sft_skipCnc_vicabase50_hpc"
+# MODEL_NAME_SUFFIX="-skipCnc-baseline-vicabase50"
+
+
+
+
+#PTHW+skip_connector
+# MODEL_TYPE="custom-spatial-mllm"
+# MODEL_PATH="${SFT_MODELS_ROOT}/20260223_022237_spatial-mllm-sft_PTHW_1st_882424BUGFIXED_ACTUAL_skipCnc_2x8_hpc"
+# MODEL_NAME_SUFFIX="-PTHW1st-skipCnc-50k-sft"\
+
+# MODEL_TYPE="spatial-mllm"
+# MODEL_PATH="${SFT_MODELS_ROOT}/20260222_024111_spatial-mllm-sft_baseline_spmllm_2x8_hpc"
+# MODEL_NAME_SUFFIX="-spmllm-baseline-50k-sft"\
 
 # MODEL_TYPE="spatial-mllm"
 # MODEL_PATH="${SFT_MODELS_ROOT}/20260218_005019_spatial-mllm-sft_2x8_hpc"
 # MODEL_NAME_SUFFIX="-sqa3d40k-sft"
 
+# MODEL_TYPE="spatial-mllm-qwen3"
+# MODEL_PATH="${SFT_MODELS_ROOT}/20260218_005019_spatial-mllm-sft_2x8_hpc"
+# MODEL_PATH="Qwen/Qwen3-VL-2B-Instruct"
+# MODEL_PATH="${SFT_MODELS_ROOT}/20260301_165544_spatial-mllm-sft_qwen3_PHW242020_sp133k2k"
+# MODEL_PATH="${SFT_MODELS_ROOT}/20260301_183415_spatial-mllm-sft_qwen3_baseline_sp133k2k"
+# MODEL_NAME_SUFFIX="-PHWrope_1stOrderPose_242020-sft"
+# MODEL_NAME_SUFFIX="-PHW242020-sp133k2k-sft"
+# MODEL_NAME_SUFFIX="-baseline-sp133k2k-sft"
+
+# ////////////////////////////
+
 # MODEL_TYPE="qwen2.5-vl"
 # MODEL_PATH="Qwen/Qwen2.5-VL-3B-Instruct"
 # MODEL_NAME_SUFFIX=""
 
-MODEL_TYPE="qwen3-vl"
-MODEL_PATH="Qwen/Qwen3-VL-2B-Instruct"
-MODEL_NAME_SUFFIX=""
+# MODEL_TYPE="qwen3-vl"
+# MODEL_PATH="Qwen/Qwen3-VL-2B-Instruct"
+# MODEL_NAME_SUFFIX=""
+
+# MODEL_TYPE="spatial-mllm-qwen3"
+# MODEL_PATH="Qwen/Qwen3-VL-2B-Instruct"
+# MODEL_NAME_SUFFIX="PHWrope_1stOrderPose_242020"
 
 MODEL_TYPE="custom-spatial-mllm"
 MODEL_PATH="Diankun/Spatial-MLLM-v1.1-Instruct-135K"
-MODEL_NAME_SUFFIX="adapted_PRoPE"
-MODEL_NAME_SUFFIX="woT"
-MODEL_NAME_SUFFIX="pRoPE"
-MODEL_NAME_SUFFIX="PTHWrope_1stOrderPose"
-MODEL_NAME_SUFFIX="PTHWrope_medoidOrderPose"
-MODEL_NAME_SUFFIX="adapted"
+# MODEL_NAME_SUFFIX="adapted_PRoPE"
+# MODEL_NAME_SUFFIX="woT"
+# MODEL_NAME_SUFFIX="pRoPE"
+# MODEL_NAME_SUFFIX="adapted"
+# MODEL_NAME_SUFFIX="PTHWrope_1stOrderPose_882424"
+# MODEL_NAME_SUFFIX="PHWrope_1stOrderPose_162424"
+# MODEL_NAME_SUFFIX="PTHWrope_1stOrderPose_882424"
+# MODEL_NAME_SUFFIX="PHWrope_medoidOrderPose_162424"
+# MODEL_NAME_SUFFIX="PTHWrope_medoidOrderPose_882424"
+MODEL_NAME_SUFFIX="-skipCnc"
 
 # MODEL_TYPE="spatial-mllm"
 # MODEL_PATH="Diankun/Spatial-MLLM-v1.1-Instruct-135K"
@@ -93,8 +138,10 @@ MODEL_NAME_SUFFIX="adapted"
 MODEL_NAME="${MODEL_TYPE}${MODEL_NAME_SUFFIX}"
 
 # nframes=(None)
-nframes=(32)
-# nframes=(16)
+# nframes=(64)
+# nframes=(32)
+nframes=(16)
+# nframes=(16 32)
 # nframes=(8)
 # nframes=(8 16 32)
 
@@ -123,6 +170,10 @@ for nframe in "${nframes[@]}"; do
     # JJ
     SAMPLING='sa_sampling'
     MERGEAWARE_DETAILS=''
+    # SAMPLING='enforce_repeat_fps_stdnorm_medoid_sampling'
+    # MERGEAWARE_DETAILS=''
+    # SAMPLING='enforce_repeat_sa_sampling'
+    # MERGEAWARE_DETAILS=''
     # SAMPLING='fps_stdnorm_medoid_sampling'
     # MERGEAWARE_DETAILS=''
     # SAMPLING='efficient_sampling'
@@ -137,6 +188,8 @@ for nframe in "${nframes[@]}"; do
     # MERGEAWARE_DETAILS='_rnd_fidss30'
     # SAMPLING='mergeaware_sa_sampling'
     # MERGEAWARE_DETAILS='_rnd_idxss1'
+    # SAMPLING='mergeaware_fps_stdnorm_medoid_sampling'
+    # MERGEAWARE_DETAILS=''
 
 
     OUTPUT_ROOT="${RESULTS_SAVE_ROOT}/results/vsibench_${SAMPLING}"
@@ -199,8 +252,25 @@ for nframe in "${nframes[@]}"; do
         $EXTRA_ARGS \
         2>&1 | tee -a "$LOG_FILE"
         # --skip_eval --input_dir "$EXISTING_INPUT_DIR" \
+
         # --use_pose_rope \
-        
-        
+        # --pose_enc_type "PHW" \
+        # --mrope_section 16 24 24 \
+
+        # eval on qwen3
+        # --use_pose_rope \
+        # --pose_enc_type "PHW" \
+        # --mrope_section 24 20 20 \
+
+        # eval on sp-mllm
+        # --use_pose_rope \
+        # --pose_enc_type "PHW" \
+        # --mrope_section 16 24 24 \
+
+        # eval on sp-mllm
+        # --use_pose_rope \
+        # --pose_enc_type "PTHW" \
+        # --mrope_section 8 8 24 24 \
+
     echo ">>> Experiment Finished. Results in $EXP_DIR"
 done

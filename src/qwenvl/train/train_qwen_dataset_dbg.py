@@ -216,8 +216,7 @@ def get_model(model_args, data_args, training_args, attn_implementation="flash_a
             model_args.pretrained_model_name_or_path,
             use_fast=True,
         ).image_processor
-    # else:
-    elif "qwen2" == model_args.model_type.lower():
+    elif "qwen2-vl" == model_args.model_type.lower():
         model = Qwen2VLForConditionalGeneration.from_pretrained(
             model_args.pretrained_model_name_or_path,
             cache_dir=training_args.cache_dir,
@@ -230,6 +229,7 @@ def get_model(model_args, data_args, training_args, attn_implementation="flash_a
         )
     else:
         raise NotImplementedError
+
     return model, image_processor
 
 
@@ -254,65 +254,65 @@ def train(attn_implementation="flash_attention_2"):
     data_args.image_processor = image_processor
     data_args.model_type = model_args.model_type
 
-    # 🆕 NEW: Apply Pose RoPE monkey patch for custom-spatial-mllm
-    if "custom-spatial-mllm" in model_args.model_type.lower() and model_args.use_pose_rope:
-        from src.custom_qwenvl.model.custom_spatial_mllm_pose_rope import patch_model_with_pose_rope
+    # # 🆕 NEW: Apply Pose RoPE monkey patch for custom-spatial-mllm
+    # if "custom-spatial-mllm" in model_args.model_type.lower() and model_args.use_pose_rope:
+    #     from src.custom_qwenvl.model.custom_spatial_mllm_pose_rope import patch_model_with_pose_rope
         
-        # Print user-level configuration before patching
-        print(f"[Training] 🔧 Applying Pose RoPE configuration:")
-        print(f"[Training]    - pose_enc_type: {model_args.pose_enc_type}")
-        print(f"[Training]    - mrope_section: {model_args.mrope_section if model_args.mrope_section else 'default (will be determined by pose_enc_type)'}")
+    #     # Print user-level configuration before patching
+    #     print(f"[Training] 🔧 Applying Pose RoPE configuration:")
+    #     print(f"[Training]    - pose_enc_type: {model_args.pose_enc_type}")
+    #     print(f"[Training]    - mrope_section: {model_args.mrope_section if model_args.mrope_section else 'default (will be determined by pose_enc_type)'}")
         
-        model = patch_model_with_pose_rope(
-            model,
-            use_pose_rope=True,
-            pose_enc_type=model_args.pose_enc_type,
-            mrope_section=model_args.mrope_section,  # 🆕 NEW: Pass custom mrope_section if provided
-            # Note: All Temporal & Pose parameters are inherited from model.__init__
-        )
+    #     model = patch_model_with_pose_rope(
+    #         model,
+    #         use_pose_rope=True,
+    #         pose_enc_type=model_args.pose_enc_type,
+    #         mrope_section=model_args.mrope_section,  # 🆕 NEW: Pass custom mrope_section if provided
+    #         # Note: All Temporal & Pose parameters are inherited from model.__init__
+    #     )
         
-        # Dynamic message based on actual pose_enc_type
-        if model_args.pose_enc_type == "PTHW":
-            dims_desc = "4D Pose-aware RoPE (P+T+H+W)"
-        elif model_args.pose_enc_type == "PHW":
-            dims_desc = "3D Pose-aware RoPE (P+H+W, ignore temporal)"
-        elif model_args.pose_enc_type == "THW":
-            dims_desc = "3D standard mRoPE (T+H+W, ignore pose)"
-        else:
-            dims_desc = f"RoPE with pose_enc_type={model_args.pose_enc_type}"
+    #     # Dynamic message based on actual pose_enc_type
+    #     if model_args.pose_enc_type == "PTHW":
+    #         dims_desc = "4D Pose-aware RoPE (P+T+H+W)"
+    #     elif model_args.pose_enc_type == "PHW":
+    #         dims_desc = "3D Pose-aware RoPE (P+H+W, ignore temporal)"
+    #     elif model_args.pose_enc_type == "THW":
+    #         dims_desc = "3D standard mRoPE (T+H+W, ignore pose)"
+    #     else:
+    #         dims_desc = f"RoPE with pose_enc_type={model_args.pose_enc_type}"
         
-        print(f"[Training] ✅ Monkey patch applied: Model now uses {dims_desc}")
+    #     print(f"[Training] ✅ Monkey patch applied: Model now uses {dims_desc}")
         
-        # 🆕 NEW: Save Pose RoPE config to model.config for checkpoint persistence
-        if not hasattr(model.config, 'pose_rope_config'):
-            model.config.pose_rope_config = {}
-        model.config.pose_rope_config['use_pose_rope'] = True
-        model.config.pose_rope_config['pose_enc_type'] = model_args.pose_enc_type
-        model.config.pose_rope_config['mrope_section'] = model.config.rope_scaling["mrope_section"]
-        print(f"[Training] 💾 Saved Pose RoPE config to model.config for checkpoint persistence")
-        print(f"[Training]    - use_pose_rope: {model.config.pose_rope_config['use_pose_rope']}")
-        print(f"[Training]    - pose_enc_type: {model.config.pose_rope_config['pose_enc_type']}")
-        print(f"[Training]    - mrope_section: {model.config.pose_rope_config['mrope_section']}")
-    elif "custom-spatial-mllm" in model_args.model_type.lower() and not model_args.use_pose_rope:
-        print(f"[Training] ℹ️  Using standard 3D mRoPE (T+H+W)")
-        # 🆕 NEW: Save config even when not using Pose RoPE
-        if not hasattr(model.config, 'pose_rope_config'):
-            model.config.pose_rope_config = {}
-        model.config.pose_rope_config['use_pose_rope'] = False
-        model.config.pose_rope_config['pose_enc_type'] = None
-        model.config.pose_rope_config['mrope_section'] = model.config.rope_scaling.get("mrope_section", [16, 24, 24])
+    #     # 🆕 NEW: Save Pose RoPE config to model.config for checkpoint persistence
+    #     if not hasattr(model.config, 'pose_rope_config'):
+    #         model.config.pose_rope_config = {}
+    #     model.config.pose_rope_config['use_pose_rope'] = True
+    #     model.config.pose_rope_config['pose_enc_type'] = model_args.pose_enc_type
+    #     model.config.pose_rope_config['mrope_section'] = model.config.rope_scaling["mrope_section"]
+    #     print(f"[Training] 💾 Saved Pose RoPE config to model.config for checkpoint persistence")
+    #     print(f"[Training]    - use_pose_rope: {model.config.pose_rope_config['use_pose_rope']}")
+    #     print(f"[Training]    - pose_enc_type: {model.config.pose_rope_config['pose_enc_type']}")
+    #     print(f"[Training]    - mrope_section: {model.config.pose_rope_config['mrope_section']}")
+    # elif "custom-spatial-mllm" in model_args.model_type.lower() and not model_args.use_pose_rope:
+    #     print(f"[Training] ℹ️  Using standard 3D mRoPE (T+H+W)")
+    #     # 🆕 NEW: Save config even when not using Pose RoPE
+    #     if not hasattr(model.config, 'pose_rope_config'):
+    #         model.config.pose_rope_config = {}
+    #     model.config.pose_rope_config['use_pose_rope'] = False
+    #     model.config.pose_rope_config['pose_enc_type'] = None
+    #     model.config.pose_rope_config['mrope_section'] = model.config.rope_scaling.get("mrope_section", [16, 24, 24])
 
-    model.config.use_cache = False
+    # model.config.use_cache = False
 
-    if training_args.gradient_checkpointing:
-        if hasattr(model, "enable_input_require_grads"):
-            model.enable_input_require_grads()
-        else:
+    # if training_args.gradient_checkpointing:
+    #     if hasattr(model, "enable_input_require_grads"):
+    #         model.enable_input_require_grads()
+    #     else:
 
-            def make_inputs_require_grad(module, input, output):
-                output.requires_grad_(True)
+    #         def make_inputs_require_grad(module, input, output):
+    #             output.requires_grad_(True)
 
-            model.get_input_embeddings().register_forward_hook(make_inputs_require_grad)
+    #         model.get_input_embeddings().register_forward_hook(make_inputs_require_grad)
 
     tokenizer = transformers.AutoTokenizer.from_pretrained(
         model_args.pretrained_model_name_or_path,
@@ -321,18 +321,25 @@ def train(attn_implementation="flash_attention_2"):
         padding_side="right",
         use_fast=False,
     )
-    set_model(model_args, model)
+    # set_model(model_args, model)
 
-    # JJ : Print module-level trainable parameters status
-    model.visual.print_trainable_parameters()
-    model.model.print_trainable_parameters()
-    if hasattr(model, "spatial_encoder"):
-        model.spatial_encoder.print_trainable_parameters()
-    if hasattr(model, "connector"):
-        model.connector.print_trainable_parameters()
+    # # JJ : Print module-level trainable parameters status
+    # model.visual.print_trainable_parameters()
+    # model.model.print_trainable_parameters()
+    # if hasattr(model, "spatial_encoder"):
+    #     model.spatial_encoder.print_trainable_parameters()
+    # if hasattr(model, "connector"):
+    #     model.connector.print_trainable_parameters()
 
     data_module = make_supervised_data_module(tokenizer=tokenizer, data_args=data_args)
-    
+
+    #///debug dataset only///
+    dataset_debug(model, tokenizer, data_module)
+    print('Done the checking...')
+    import sys
+    sys.exit()
+    #///debug dataset only///
+
     # JJ: For custom-spatial-mllm, wrap collator to remove position_ids
     # This forces the model to recompute position_ids with custom RoPE logic
     if "custom-spatial-mllm" in model_args.model_type.lower():
@@ -393,6 +400,99 @@ def train(attn_implementation="flash_attention_2"):
 
     safe_save_model_for_hf_trainer(trainer=trainer, output_dir=training_args.output_dir)
 
+
+
+import torch
+from tqdm import tqdm
+def dataset_debug(
+    model,
+    tokenizer,
+    data_module,
+    device="cuda",
+    run_forward=False,
+    batch_size=1,
+):
+    """
+    Full dataset validator.
+
+    - Iterates over entire dataset
+    - Applies collator
+    - Checks tensor integrity
+    - Optionally runs forward pass (no backward)
+    """
+
+    print("\n========== DATASET DEBUG START ==========\n")
+
+    train_dataset = data_module["train_dataset"]
+    collator = data_module["data_collator"]
+
+    total_samples = len(train_dataset)
+    print(f"Total samples: {total_samples}")
+
+    # model = model.to(device)
+    # model.eval()
+
+    broken_samples = 0
+    broken_batches = 0
+    nan_batches = 0
+
+    buffer = []
+
+    for idx in tqdm(range(total_samples)):
+
+        try:
+            sample = train_dataset[idx]
+
+            # Basic sanity check
+            if not isinstance(sample, dict):
+                print(f"[Sample Error] Index {idx} is not dict")
+                broken_samples += 1
+                continue
+
+            buffer.append(sample)
+
+            # When enough samples collected → build batch
+            if len(buffer) == batch_size:
+
+                try:
+                    batch = collator(buffer)
+
+                    # Move tensors to device
+                    for k, v in batch.items():
+                        if torch.is_tensor(v):
+                            batch[k] = v.to(device)
+
+                            # Check NaNs
+                            if torch.isnan(batch[k]).any():
+                                print(f"[NaN Detected] Batch containing sample {idx}")
+                                nan_batches += 1
+
+                    # # Optional forward pass
+                    # if run_forward:
+                    #     with torch.no_grad():
+                    #         outputs = model(**batch)
+
+                    #         if hasattr(outputs, "loss"):
+                    #             if torch.isnan(outputs.loss):
+                    #                 print(f"[NaN Loss] Batch at index {idx}")
+                    #                 nan_batches += 1
+
+                except Exception as e:
+                    print(f"[Batch Error] Around index {idx}: {e}")
+                    broken_batches += 1
+
+                buffer = []
+
+        except Exception as e:
+            print(f"[Sample Loading Error] Index {idx}: {e}")
+            broken_samples += 1
+
+    print("\n========== DATASET DEBUG SUMMARY ==========")
+    print(f"Total samples         : {total_samples}")
+    print(f"Broken samples        : {broken_samples}")
+    print(f"Broken batches        : {broken_batches}")
+    print(f"Batches with NaNs     : {nan_batches}")
+    print("==========================================\n")
 
 if __name__ == "__main__":
     train(attn_implementation="flash_attention_2")

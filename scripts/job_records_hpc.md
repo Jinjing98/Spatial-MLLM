@@ -6,17 +6,62 @@ sample frame mattters (3D q in general n actual spatil), while PE esepeically ne
 
 fot THW style, we extend with P.
 fot HW style, we extend with P.
-
+/home/jixu233b/Projects/VLM_3D/SpatialMllmHallucinate/third_party/Spatial-MLLM/.cache
 -pose from other nets. or even idealy online? or from slam?
 -samples from other sampling stategies
 -base PE format: THW and HW
 
+04.03 eval on SA
+3029543 enforce skipCnc for spmllm baseline model.
+
+03.03 eval on sft qwen3 model of fps sa
+3027156 -baseline-sp133k2k-sft
+3027155 -PHW242020-sp133k2k-sft
+
+eval custo spmllm on sa
+3027161 baseline with skip connector
+
+01.03
+train qwen3: 133krp2k - the baseline seems still better than phw
+3023614 3023170 #baseline _qwen3_baseline_sp133k2k
+3023613 3023171 #phw _qwen3_phw242020_sp133k2k
+
+eval qwen3:
+3023165 enforce dual fps
+
+eval spmllm:
+3023610 x(wrongly eval with medoid) 3022957 pthw
+3023612 x(wrongly eval with medoid) 3022958 phw
+3022960 baseline_skipCnc_vica
+
+train: sp mllm
+3022966 baseline_skipCnc_133k2k
+3023173 baseline_133k2k
+
 24.02
+SPMLLM series
+3009776 _pthw1st_skipCnc_sp133krp2k
+3009774 _phw1st_skipCnc_sp133krp2k
+3009832 _qwen25_sp133krp2k
+
 TODO:
 train a spmllm wo connector model for fair comparision?
 we compete with standard spmllm traning to show that we only need pose?
 
 23.02 
+train:
+3008896 _skipCnc_vicabase50_hpc
+
+trian: ViCA data is poor--fall back to sqa3d
+3005625 qwen3 baseline
+3005624 qwen3 PHW
+train: latest PTHW_1st(w.o connector) PTHW_medoid(w.o/with connector) on spmllm wtih SQA3D
+3005024 _PTHW_1st_882424_skipCnc_sqa40k_hpc
+3007985 _qwen3_2x8_hpc_40ksqa
+
+
+
+
 train: qwen3 PHW_1st vs qwen3
 3002675 3002421 3001694 _qwen3_phw_1st_2x8_hpc_50ViCA
 3002955 _qwen3_2x8_hpc_50ViCA

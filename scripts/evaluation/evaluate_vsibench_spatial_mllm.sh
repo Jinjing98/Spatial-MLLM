@@ -59,15 +59,17 @@ mkdir -p "$OUTPUT_ROOT"
 
 MODEL_TYPE="qwen3-vl"
 MODEL_PATH="Qwen/Qwen3-VL-2B-Instruct"
-
+MODEL_NAME_SUFFIX=""
 # MODEL_TYPE="spatial-mllm"
 
-# MODEL_TYPE="custom-spatial-mllm"
-# MODEL_PATH="Diankun/Spatial-MLLM-v1.1-Instruct-135K"
+MODEL_TYPE="spatial-mllm"
+MODEL_PATH="Diankun/Spatial-MLLM-v1.1-Instruct-135K"
+MODEL_NAME_SUFFIX=""
 
 
-MODEL_NAME=$(echo "$MODEL_PATH" | cut -d'/' -f2)
+# MODEL_NAME=$(echo "$MODEL_PATH" | cut -d'/' -f2)
 
+MODEL_NAME="${MODEL_TYPE}${MODEL_NAME_SUFFIX}"
 
 
 
@@ -103,7 +105,7 @@ QUESTION_TYPES=("${QUESTION_TYPE_LIST[@]}") #all cases
 
 # nframes=(None)
 # nframes=(8)
-nframes=(8 16 32)
+nframes=(8 32)
 # nframes=(32)
 # sample_fps=(None)
 # sample_fps=(1)

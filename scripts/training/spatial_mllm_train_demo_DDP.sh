@@ -121,7 +121,9 @@ args="
     --model_max_length 8192 \
     --gradient_checkpointing ${GRADIENT_CHECKPOINTING} \
     --dataloader_num_workers ${NUM_WORKERS} \
-    --run_name ${run_name}"
+    --run_name ${run_name} \
+    --report_to wandb"
+    # --report_to none"
 
 # JJ: Add Pose RoPE args if enabled (only for custom-spatial-mllm)
 if [ "$USE_POSE_ROPE" = "True" ] || [ "$USE_POSE_ROPE" = "true" ]; then
