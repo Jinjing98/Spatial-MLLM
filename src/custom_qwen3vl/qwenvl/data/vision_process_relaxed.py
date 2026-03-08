@@ -261,6 +261,16 @@ def _read_video_torchvision_relaxed(
     sample_fps = nframes / max(total_frames, 1e-6) * video_fps
     video = video[idx]
 
+    # JJ: Ensure video frames are divisible by FRAME_FACTOR (temporal_patch_size=2)
+    if video.shape[0] % FRAME_FACTOR != 0:
+        num_padding = FRAME_FACTOR - (video.shape[0] % FRAME_FACTOR)
+        # Repeat last frame to pad
+        padding = video[-1:].repeat(num_padding, 1, 1, 1)
+        video = torch.cat([video, padding], dim=0)
+        # Update idx to reflect padding (repeat last index)
+        idx = torch.cat([idx, idx[-1:].repeat(num_padding)])
+        print(f"[PADDING torchvision] {ele.get('video', 'unknown')} | {video.shape[0]-num_padding} -> {video.shape[0]} frames")
+
     video_metadata = dict(
         fps=video_fps,
         frames_indices=idx,
@@ -365,6 +375,16 @@ def _read_video_decord_relaxed(
     logger.info(f"decord:  {video_path=}, {total_frames=}, {video_fps=}, time={time.time() - st:.3f}s")
     sample_fps = nframes / max(total_frames, 1e-6) * video_fps
 
+    # JJ: Ensure video frames are divisible by FRAME_FACTOR (temporal_patch_size=2)
+    if video.shape[0] % FRAME_FACTOR != 0:
+        num_padding = FRAME_FACTOR - (video.shape[0] % FRAME_FACTOR)
+        # Repeat last frame to pad
+        padding = video[-1:].repeat(num_padding, 1, 1, 1)
+        video = torch.cat([video, padding], dim=0)
+        # Update idx to reflect padding (repeat last index)
+        idx = idx + [idx[-1]] * num_padding
+        print(f"[PADDING decord] {ele.get('video', 'unknown')} | {video.shape[0]-num_padding} -> {video.shape[0]} frames")
+
     video_metadata = dict(
         fps=video_fps,
         frames_indices=idx,
@@ -412,6 +432,16 @@ def _read_video_torchcodec_relaxed(
     sample_fps = nframes / max(total_frames, 1e-6) * video_fps
     video = decoder.get_frames_at(indices=idx).data
     logger.info(f"torchcodec:  {video_path=}, {total_frames=}, {video_fps=}, time={time.time() - st:.3f}s")
+
+    # JJ: Ensure video frames are divisible by FRAME_FACTOR (temporal_patch_size=2)
+    if video.shape[0] % FRAME_FACTOR != 0:
+        num_padding = FRAME_FACTOR - (video.shape[0] % FRAME_FACTOR)
+        # Repeat last frame to pad
+        padding = video[-1:].repeat(num_padding, 1, 1, 1)
+        video = torch.cat([video, padding], dim=0)
+        # Update idx to reflect padding (repeat last index)
+        idx = idx + [idx[-1]] * num_padding
+        print(f"[PADDING torchcodec] {ele.get('video', 'unknown')} | {video.shape[0]-num_padding} -> {video.shape[0]} frames")
 
     video_metadata = dict(
         fps=video_fps,

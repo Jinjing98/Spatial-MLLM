@@ -170,7 +170,7 @@ def patch_qwen3_with_pose_rope(
         """
         
         # JJ: Debug - verify monkey patch is called
-        print("🎯🎯🎯 [get_rope_index_with_pose] MONKEY PATCH IS CALLED!")
+        # print("🎯🎯🎯 [get_rope_index_with_pose] MONKEY PATCH IS CALLED!")
         
         # ==================== Step 0: Prerequisites Check ====================
         # JJ: Strict error handling - no poses = raise error (as requested by user)
