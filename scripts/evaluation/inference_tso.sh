@@ -14,17 +14,22 @@
 MODEL_TYPE="qwen3-vl"
 MODEL_PATH="Qwen/Qwen3-VL-2B-Instruct"
 
-# MODEL_TYPE="spatial-mllm-qwen3"
-# MODEL_PATH="Qwen/Qwen3-VL-2B-Instruct"
+MODEL_TYPE="spatial-mllm-qwen3"
+MODEL_PATH="Qwen/Qwen3-VL-2B-Instruct"
 
 
-# MODEL_TYPE="spatial-mllm"
-# MODEL_TYPE="custom-spatial-mllm"
-# MODEL_PATH="Diankun/Spatial-MLLM-v1.1-Instruct-135K"
+MODEL_TYPE="spatial-mllm"
+MODEL_TYPE="custom-spatial-mllm"
+MODEL_PATH="Diankun/Spatial-MLLM-v1.1-Instruct-135K"
+
+MODEL_TYPE="spatial-mllm"
+MODEL_TYPE="custom-spatial-mllm"
+MODEL_PATH="Diankun/Spatial-MLLM-v1.1-Instruct-135K"
+# MODEL_PATH="Qwen/Qwen2.5-VL-3B-Instruct"
 
 
 VIDEO_PATH="datasets/fool_mllm/42446103.mp4" # given video path
-VIDEO_PATH="datasets/fool_mllm/scannetpp_3f15a9266d.mp4" # given video path
+# VIDEO_PATH="datasets/fool_mllm/scannetpp_3f15a9266d.mp4" # given video path
 # VIDEO_PATH="datasets/fool_mllm/42446103_sa16_reference" # given sampled video path
 # VIDEO_PATH="datasets/fool_mllm/42446103_uniform16_reference" # given sampled video path
 # VIDEO_PATH="datasets/fool_mllm/42446103_fool" # given sampled video path
@@ -57,10 +62,12 @@ ARGS=(
     --video_path "${VIDEO_PATH}"
     --text "${TEXT}"
     "${EXTRA_ARGS[@]}"
-    # --pose_enc_type PTHW
-    # --mrope_section 8 8 24 24
     # --pose_enc_type PHW
     # --mrope_section 24 20 20
+    # --mp4_nframes 32
+    # --pose_enc_type PTHW
+    # --mrope_section 8 8 24 24
+
     # --pose_enc_type PHW
     # --mrope_section 16 24 24
     # --use_pose_rope
