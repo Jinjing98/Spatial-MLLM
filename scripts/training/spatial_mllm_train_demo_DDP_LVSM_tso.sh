@@ -1,63 +1,72 @@
 #!/bin/bash
 
+#SBATCH --nodes=1
+#SBATCH --ntasks=1  #JJ was 2 for init 2 sft models
+#SBATCH --gres=gpu:2           # use 1 GPU per node (i.e. use one GPU per task)
+#SBATCH --gpus-per-task=2 #JJ was 1 for init 2 sft models
+#SBATCH --cpus-per-task=8
+#SBATCH --time=60:00:00
+#SBATCH --mem=80G
+#SBATCH --partition=capella
+#SBATCH --mail-user=xvjinjing8@gmail.com
+#SBATCH --mail-type=BEGIN,END,FAIL,REQUEUE,TIME_LIMIT_90
+#SBATCH --error=/data/horse/ws/jixu233b-metadata_ws/hpc_out/%j.err
+#SBATCH --output=/data/horse/ws/jixu233b-metadata_ws/hpc_out/%j.out
 
 set -euo pipefail
 
+source /software/rapids/r24.10/Anaconda3/2024.02-1/etc/profile.d/conda.sh
+conda activate /data/horse/ws/jixu233b-3d_ws/envs/spatial-mllm
+module load CUDA/12.4.0
+cd $SLURM_SUBMIT_DIR
+
 # Set environment variables
-# export WANDB_BASE_URL="https://api.bandw.top"
 export WANDB_PROJECT="Spatial-MLLM-SFT"
 
 export NCCL_P2P_DISABLE=1
 export NCCL_IB_DISABLE=1
 
-# DATASET_ROOT="/mnt/nct-zfs/TCO-All/SharedDatasets/vsibench"  # Dataset root directory
-# DATASETS="spatial_mllm_mix_10_dbg" # default "spatial_mllm_mix_133k,route_plan_scannet_2k"
+PRETRAINED_CKPT_ROOT="/data/horse/ws/jixu233b-metadata_ws/models/Spatial-MLLM/"
 
-DATASET_ROOT="/mnt/nct-zfs/TCO-All/SharedDatasets/SQA3D"  # Dataset root directory
-# DATASETS="sqa3d_filtered_40k" # default "sqa3d_filtered_40k,sqa3d_filtered_40k_small"
-DATASETS="sqa3d_filtered_40k_small" # default "sqa3d_filtered_40k,sqa3d_filtered_40k_small"
-
-# DATASET_ROOT="/mnt/cluster/workspaces/jinjingxu/proj/vlm/SpatialMllmHallucinate/third_party/Spatial-MLLM/datasets/ViCA-322K"  # Dataset root directory
-# DATASETS="vica_322k_arkitscenes/base/obj_appearance_order_small" # default "sqa3d_filtered_40k,sqa3d_filtered_40k_small"
-# # Use 50% of ViCA data
-# DATASETS="vica_322k_all%50"
+# ============ Dataset ============
+DATASET_ROOT="/home/jixu233b/Projects/VLM_3D/SpatialMllmHallucinate/third_party/Spatial-MLLM/datasets/SPMLLM-DATA"
+DATASETS="spatial_mllm_mix_133k,route_plan_scannet_2k"
+# DATASET_ROOT="/data/horse/ws/jixu233b-metadata_ws/datasets/SQA3D"
+# DATASETS="sqa3d_filtered_40k"
+# DATASET_ROOT="/data/horse/ws/jixu233b-metadata_ws/datasets/ViCA-322K"
 # DATASETS="vica_322k_base%50"
-# DATASETS="vica_322k_arkitscenes"  # All ARKitScenes data
-
-# DATASET_ROOT="/data/horse/ws/jixu233b-metadata_ws/datasets/vsibench"  # Dataset root directory
-# Export DATASET_ROOT for Python scripts (__init__.py) to use for data loading
 export DATASET_ROOT
+
+# ============ Training basics ============
 # JJ Freq Edit
-OUTPUT_ROOT="/mnt/nct-zfs/TCO-Test/jinjingxu/exps/train/spatialmllm"
-TRAIN_EPOCHS=20 # default 1 
-NUM_WORKERS=0 # default 8, set to 0 to avoid multiprocessing overhead
-NPROC_PER_NODE=1 # default 6 
-GRAD_ACCUM_STEPS=1 # JJ: reduced from 8 to match 4-sample debug dataset (4 samples / 2 GPUs = 2 per GPU)
-BATCH_SIZE=1 # default 1 
-VIDEO_MAX_FRAMES=16 # default 16
-VIDEO_MIN_FRAMES=16 # default 16
-VIDEO_FRAME_FPS=4 # default 4
+OUTPUT_ROOT="/data/horse/ws/jixu233b-metadata_ws/exps/train/spatialmllm"
+TRAIN_EPOCHS=1 # default 1
+NUM_WORKERS=2 # default 8
+NPROC_PER_NODE=2 # default 6
+GRAD_ACCUM_STEPS=8
+BATCH_SIZE=1
+VIDEO_MAX_FRAMES=16
+VIDEO_MIN_FRAMES=16
+VIDEO_FRAME_FPS=4
 # JJ : Temporal-merge-aware real-neighbour sampling
 # Sample N/2 anchors uniformly, then add a real temporal neighbour for each anchor.
-SAMPLING_ENFORCE_REAL_NEIGHBOUR=False  # set True to enable
+SAMPLING_ENFORCE_REAL_NEIGHBOUR=True  # set True to enable
 NEIGHBOUR_MODE="after"                 # before | after | random
-NEIGHBOUR_MAX_STEP=1                   # max frame-ID offset; actual step ~ randint(1, max)
-GRADIENT_CHECKPOINTING=False # default False
+NEIGHBOUR_MAX_STEP=0                   # max frame-ID offset; actual step ~ randint(1, max)
+GRADIENT_CHECKPOINTING=True
 MODEL_TYPE="custom-spatial-mllm-lvsm" #"custom-spatial-mllm-lvsm" or "custom-spatial-mllm"
-# MODEL_TYPE="custom-spatial-mllm" #"custom-spatial-mllm" # spatial-mllm
 PRETRAINED_MODEL_NAME_OR_PATH="Qwen/Qwen2.5-VL-3B-Instruct"
-RUN_NAME_APPENDIX="_2x8_tso"
+RUN_NAME_APPENDIX="_lvsm_2x8_hpc"
 
 # ============ What to train (freeze / unfreeze) ============
-# Base model components
+# JJ : Base model components
 TUNE_VISION=False                # ViT visual encoder
 TUNE_SPATIAL_ENCODER=False       # VGGT spatial encoder
-TUNE_CONNECTOR=False              # MLPAddConnector (visual.merger + connector)
-TUNE_LLM=True                    # Qwen LLM backbone + lm_head
-# LVSM-specific (only when MODEL_TYPE=custom-spatial-mllm-lvsm)
+TUNE_CONNECTOR=False             # MLPAddConnector (visual.merger + connector)
+TUNE_LLM=True                   # Qwen LLM backbone + lm_head
+# JJ : LVSM-specific (only when MODEL_TYPE=custom-spatial-mllm-lvsm)
 TUNE_CONNECTOR_LVSM=True        # connector_lvsm (FiLM adaptor)
 TUNE_LVSM_DECODER=True          # lvsm_model transformer_blocks + image_token_decoder
-# TUNE_LVSM_DECODER=False       # keep LVSM decoder frozen until NVS loss is stable
 
 # ============ Learning rates ============
 lr=7e-6                          # base lr (LLM, spatial_encoder, lvsm_model if unfrozen)
@@ -71,7 +80,6 @@ max_grad_norm=1.0
 
 # ============ LVSM integration config (only for custom-spatial-mllm-lvsm) ============
 ENFORCE_LVSM=True
-# ENFORCE_LVSM=False
 LVSM_CHECKPOINT_PATH="submodule/LVSM/checkpoints/scene_decoder_only_256.pt"
 LVSM_IMAGE_SIZE=256
 # JJ : NVS_LOSS_WEIGHT tuning guide:
@@ -82,14 +90,13 @@ LVSM_IMAGE_SIZE=256
 # JJ : With residual context architecture, NVS starts stable (gate=0).
 # 0.01 is a safe starting point.
 NVS_LOSS_WEIGHT=0.1
-NUM_TARGET_VIEWS=8 # bigger more stable
+NUM_TARGET_VIEWS=4
 LVSM_L2_WEIGHT=1.0
 LVSM_PERCEPTUAL_WEIGHT=0.5
 LVSM_LPIPS_WEIGHT=0.0
 VGG_WEIGHT_FILE="submodule/LVSM/metric_checkpoint/imagenet-vgg-verydeep-19.mat"
 NVS_ENABLED=True         # JJ : Load novel target frames for NVS loss
 # JJ : NVS target pool — 'nvs' (novel only), 'input' (reconstruction sanity check), 'all' (mixed)
-# NVS_TARGET_POOL="nvs"
 NVS_TARGET_POOL="nvs"
 NVS_IMG_LOG_INTERVAL=2  # JJ : Log rendered vs GT images to wandb every N steps (0=disable)
 # JJ : Adapter types for LVSM ↔ QwenVL bridges (currently only "linear")
@@ -97,10 +104,8 @@ LVSM2QWEN_TYPE="linear"
 LLM2LVSM_TYPE="linear"
 # JJ : SDPA output gating (arxiv 2505.06708) — element-wise sigmoid gate after attention
 ENABLE_SDPA_GATING=False
-ENABLE_SDPA_GATING=True
 
-# JJ: 4D Pose RoPE config (only for custom-spatial-mllm)
-# USE_POSE_ROPE=True  # Set to True to enable 4D Pose-aware RoPE
+# ============ 4D Pose RoPE config (only for custom-spatial-mllm) ============
 USE_POSE_ROPE=False  # Set to True to enable 4D Pose-aware RoPE
 POSE_ENC_TYPE="PTHW"  # Pose encoding type ('PTHW', 'PHW', or 'THW')
 MROPE_SECTION="8 8 24 24"  # Custom mrope_section (e.g., "16 24 24" for 3D or "8 8 24 24" for 4D). Leave empty for default.
@@ -114,29 +119,21 @@ MASTER_PORT=${MASTER_PORT:-$(shuf -i 20001-29999 -n 1)}
 NNODES=${WORLD_SIZE:-1}
 
 # DeepSpeed configuration (disabled for single GPU training)
-# deepspeed=./scripts/training/zero3.json
 USE_DEEPSPEED=False  # Set to True to enable DeepSpeed
 
 # Model configuration
-# model_type=spatial-mllm
-vggt_checkpoints_path=checkpoints/VGGT-1B/model.safetensors
+vggt_checkpoints_path="${PRETRAINED_CKPT_ROOT}checkpoints/VGGT-1B/model.safetensors"
 spatial_embeds_layer_idx=-1
-connector_type=mlp_add 
-# pretrained_model_name_or_path=Qwen/Qwen2.5-VL-3B-Instruct  # Using HuggingFace model ID
+connector_type=mlp_add
+
 # Training entry point
 entry_file=src/qwenvl/train/train_qwen.py
-
-# Dataset configuration
-# datasets="spatial_mllm_mix_133k,route_plan_scannet_2k"
 
 # Data configuration
 max_pixels=324576
 min_pixels=293216
 video_max_frame_pixels=324576
 video_min_frame_pixels=293216
-# video_max_frames=16
-# video_min_frames=16
-# video_frame_fps=4
 
 # Output configuration
 timestamp=$(date +'%Y%m%d_%H%M%S')
@@ -147,7 +144,6 @@ mkdir -p ${output_dir}
 logfile="${output_dir}/$(date +'%Y%m%d_%H%M%S')_train.log"
 
 # Training arguments
-# JJ : Removed --deepspeed for native PyTorch single GPU training
 args="
     --model_type ${MODEL_TYPE} \
     --vggt_checkpoints_path ${vggt_checkpoints_path} \
@@ -175,14 +171,15 @@ args="
     --neighbour_mode ${NEIGHBOUR_MODE} \
     --neighbour_max_step ${NEIGHBOUR_MAX_STEP} \
     --eval_strategy "no" \
-    --save_strategy "epoch" \
+    --save_strategy "steps" \
+    --save_steps 0.0625 \
     --save_total_limit 2 \
     --learning_rate ${lr} \
     --mm_projector_lr ${mm_projector_lr} \
     --weight_decay ${weight_decay} \
-    --warmup_ratio 0.0 \
+    --warmup_ratio 0.03 \
     --max_grad_norm ${max_grad_norm} \
-    --lr_scheduler_type "constant" \
+    --lr_scheduler_type "cosine" \
     --logging_steps 1 \
     --model_max_length 8192 \
     --gradient_checkpointing ${GRADIENT_CHECKPOINTING} \
@@ -216,8 +213,6 @@ fi
 # JJ: Add Pose RoPE args if enabled (only for custom-spatial-mllm)
 if [ "$USE_POSE_ROPE" = "True" ] || [ "$USE_POSE_ROPE" = "true" ]; then
     args="$args --use_pose_rope --pose_enc_type ${POSE_ENC_TYPE}"
-    
-    # Add mrope_section if provided
     if [ -n "$MROPE_SECTION" ]; then
         args="$args --mrope_section ${MROPE_SECTION}"
         echo "[Training] 4D Pose RoPE enabled: pose_enc_type=${POSE_ENC_TYPE}, mrope_section=${MROPE_SECTION}"
@@ -226,12 +221,11 @@ if [ "$USE_POSE_ROPE" = "True" ] || [ "$USE_POSE_ROPE" = "true" ]; then
     fi
 fi
 
-    # JJ : Enable wandb reporting for LVSM diagnostics
+# JJ : Enable wandb reporting for LVSM diagnostics
 args="$args --report_to wandb"
 
-# Launch training (native PyTorch without DeepSpeed)
-python ${entry_file} ${args} 2>&1 | tee -a "${logfile}"
-# torchrun --nproc_per_node=${NPROC_PER_NODE} \
-#          --master_addr=${MASTER_ADDR} \
-#          --master_port=${MASTER_PORT} \
-#          ${entry_file} ${args} 2>&1 | tee -a "${logfile}"
+# Launch training (DDP with torchrun)
+torchrun --nproc_per_node=${NPROC_PER_NODE} \
+         --master_addr=${MASTER_ADDR} \
+         --master_port=${MASTER_PORT} \
+         ${entry_file} ${args} 2>&1 | tee -a "${logfile}"

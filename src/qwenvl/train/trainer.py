@@ -380,6 +380,48 @@ def create_optimizer(self):
                 },
             ]
 
+        # JJ : Separate lr group for LVSM adaptor (connector_lvsm only).
+        # lvsm_model (decoder) stays in default group → uses base --learning_rate.
+        lvsm_adaptor_lr = getattr(self.args, 'lvsm_adaptor_lr', None)
+        if lvsm_adaptor_lr is not None and lvsm_adaptor_lr > 0:
+            # Collect connector_lvsm param ids only
+            lvsm_param_ids = set()
+            module = getattr(opt_model, 'connector_lvsm', None)
+            if module is not None:
+                for p in module.parameters():
+                    if p.requires_grad:
+                        lvsm_param_ids.add(id(p))
+
+            if lvsm_param_ids:
+                # Remove LVSM params from existing groups
+                for group in optimizer_grouped_parameters:
+                    group["params"] = [p for p in group["params"] if id(p) not in lvsm_param_ids]
+
+                # Collect LVSM params split by decay / no-decay
+                lvsm_decay_params = []
+                lvsm_no_decay_params = []
+                for n, p in opt_model.named_parameters():
+                    if id(p) in lvsm_param_ids:
+                        if n in decay_parameters:
+                            lvsm_decay_params.append(p)
+                        else:
+                            lvsm_no_decay_params.append(p)
+
+                if lvsm_decay_params:
+                    optimizer_grouped_parameters.append({
+                        "params": lvsm_decay_params,
+                        "weight_decay": self.args.weight_decay,
+                        "lr": lvsm_adaptor_lr,
+                    })
+                if lvsm_no_decay_params:
+                    optimizer_grouped_parameters.append({
+                        "params": lvsm_no_decay_params,
+                        "weight_decay": 0.0,
+                        "lr": lvsm_adaptor_lr,
+                    })
+                print(f"[Optimizer] LVSM adaptor param groups: lr={lvsm_adaptor_lr}, "
+                      f"decay={len(lvsm_decay_params)}, no_decay={len(lvsm_no_decay_params)}")
+
         optimizer_cls, optimizer_kwargs = Trainer.get_optimizer_cls_and_kwargs(
             self.args
         )

@@ -140,10 +140,105 @@ def set_model(model_args, model):
             for n, p in model.connector.named_parameters():
                 p.requires_grad = False
 
+    # JJ : LVSM components
+    if hasattr(model, "connector_lvsm"):
+        if model_args.tune_mm_connector_lvsm:
+            for n, p in model.connector_lvsm.named_parameters():
+                p.requires_grad = True
+        else:
+            for n, p in model.connector_lvsm.named_parameters():
+                p.requires_grad = False
+
+    if hasattr(model, "lvsm_model"):
+        # JJ : LVSM base: freeze everything first
+        for n, p in model.lvsm_model.named_parameters():
+            p.requires_grad = False
+        # JJ : Selectively unfreeze transformer_blocks + image_token_decoder
+        if getattr(model_args, 'tune_lvsm_decoder', False):
+            for n, p in model.lvsm_model.transformer_blocks.named_parameters():
+                p.requires_grad = True
+            for n, p in model.lvsm_model.image_token_decoder.named_parameters():
+                p.requires_grad = True
+            for n, p in model.lvsm_model.transformer_input_layernorm.named_parameters():
+                p.requires_grad = True
+            # JJ : image_tokenizer + target_pose_tokenizer stay frozen
+
+    if hasattr(model, "nvs_loss_fn"):
+        # JJ : NVS loss modules are always frozen
+        for n, p in model.nvs_loss_fn.named_parameters():
+            p.requires_grad = False
+
+    # JJ : SDPA gating params — always trainable when present
+    _gate_count = 0
+    for n, p in model.named_parameters():
+        if "sdpa_gate" in n:
+            p.requires_grad = True
+            _gate_count += 1
+    if _gate_count > 0:
+        print(f"[INFO] SDPA gating: {_gate_count} gate params set to trainable")
+
 
 def get_model(model_args, data_args, training_args, attn_implementation="flash_attention_2"):
+    # JJ : Custom spatial MLLM with LVSM integration
+    if model_args.model_type.lower() == "custom-spatial-mllm-lvsm":
+        from src.custom_qwenvl.model.custom_spatial_mllm_lvsm import (
+            CustomSpatialMLLMLVSMConfig,
+            CustomSpatialMLLMLVSMForConditionalGeneration,
+        )
+
+        lvsm_config = {
+            "enforce_LVSM": model_args.enforce_lvsm,
+            "lvsm_checkpoint_path": model_args.lvsm_checkpoint_path,
+            "nvs_loss_weight": model_args.nvs_loss_weight,
+            "num_target_views": model_args.num_target_views,
+            "l2_loss_weight": model_args.lvsm_l2_weight,
+            "perceptual_loss_weight": model_args.lvsm_perceptual_weight,
+            "lpips_loss_weight": model_args.lvsm_lpips_weight,
+            "vgg_weight_file": model_args.vgg_weight_file,
+            "nvs_img_log_interval": model_args.nvs_img_log_interval,
+            "nvs_target_pool": getattr(model_args, 'nvs_target_pool', 'nvs'),
+            "lvsm2qwen_type": getattr(model_args, 'lvsm2qwen_type', 'linear'),
+            "llm2lvsm_type": getattr(model_args, 'llm2lvsm_type', 'linear'),
+        }
+
+        spatial_mllm_lvsm_config = CustomSpatialMLLMLVSMConfig.from_pretrained(
+            model_args.pretrained_model_name_or_path,
+            spatial_config={
+                "img_size": 518,
+                "patch_size": 14,
+                "embed_dim": 1024,
+            },
+            connector_config={
+                "connector_type": model_args.connector_type,
+                "spatial_embeds_layer_idx": model_args.spatial_embeds_layer_idx,
+            },
+            lvsm_config=lvsm_config,
+        )
+        # JJ : SDPA output gating flag — propagate to config so decoder layers can read it
+        spatial_mllm_lvsm_config.enable_sdpa_gating = getattr(model_args, 'enable_sdpa_gating', False)
+        model = CustomSpatialMLLMLVSMForConditionalGeneration.from_pretrained(
+            model_args.pretrained_model_name_or_path,
+            config=spatial_mllm_lvsm_config,
+            attn_implementation=attn_implementation,
+            torch_dtype=(torch.bfloat16 if training_args.bf16 else None),
+        )
+        # JJ : Load VGGT weights (after from_pretrained, same as base model)
+        model.spatial_encoder.load_pretrained_weights(model_args.vggt_checkpoints_path)
+        device = next(model.parameters()).device
+        dtype = next(model.parameters()).dtype
+        model.spatial_encoder.to(device=device, dtype=dtype)
+        # JJ : Load LVSM pretrained weights AFTER from_pretrained
+        # Must be done here because post_init() in __init__ re-initializes
+        # all nn.Linear modules, destroying weights loaded during __init__.
+        model.load_lvsm_checkpoint()
+        model.lvsm_model.to(device=device, dtype=dtype)
+
+        image_processor = Qwen2VLImageProcessorModified.from_pretrained(
+            model_args.pretrained_model_name_or_path,
+        )
+
     # JJ: Custom spatial MLLM with custom decoder
-    if model_args.model_type.lower() == "custom-spatial-mllm":
+    elif model_args.model_type.lower() == "custom-spatial-mllm":
         from src.custom_qwenvl.model.custom_spatial_mllm import (
             CustomSpatialMLLMConfig,
             CustomSpatialMLLMForConditionalGeneration,
@@ -161,6 +256,8 @@ def get_model(model_args, data_args, training_args, attn_implementation="flash_a
                 "spatial_embeds_layer_idx": model_args.spatial_embeds_layer_idx,
             },
         )
+        # JJ : SDPA output gating flag
+        spatial_mllm_config.enable_sdpa_gating = getattr(model_args, 'enable_sdpa_gating', False)
         model = CustomSpatialMLLMForConditionalGeneration.from_pretrained(
             model_args.pretrained_model_name_or_path,
             config=spatial_mllm_config,
@@ -330,6 +427,16 @@ def train(attn_implementation="flash_attention_2"):
         model.spatial_encoder.print_trainable_parameters()
     if hasattr(model, "connector"):
         model.connector.print_trainable_parameters()
+    # JJ : Print LVSM connector trainable params
+    if hasattr(model, "connector_lvsm"):
+        total_p = sum(p.numel() for p in model.connector_lvsm.parameters())
+        train_p = sum(p.numel() for p in model.connector_lvsm.parameters() if p.requires_grad)
+        print(f"[connector_lvsm] Total: {total_p:,}, Trainable: {train_p:,}")
+    # JJ : Print LVSM model trainable params
+    if hasattr(model, "lvsm_model"):
+        total_p = sum(p.numel() for p in model.lvsm_model.parameters())
+        train_p = sum(p.numel() for p in model.lvsm_model.parameters() if p.requires_grad)
+        print(f"[lvsm_model] Total: {total_p:,}, Trainable: {train_p:,}")
 
     data_module = make_supervised_data_module(tokenizer=tokenizer, data_args=data_args)
     

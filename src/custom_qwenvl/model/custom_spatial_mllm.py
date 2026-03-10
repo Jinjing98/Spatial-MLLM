@@ -54,13 +54,19 @@ class CustomSpatialMLLMForConditionalGeneration(Qwen2_5_VLForConditionalGenerati
         # Create custom VL model with same config
         print("[INFO] Create CustomQwen2_5_VLModel with default Qwen25 config...")
         print("[INFO] Default Qwen25 temporal patch size: ", original_vl_model.config.vision_config.temporal_patch_size)
+        # JJ : Propagate enable_sdpa_gating to inner config so decoder layers can read it
+        original_vl_model.config.enable_sdpa_gating = getattr(config, 'enable_sdpa_gating', False)
         custom_vl_model = CustomQwen2_5_VLModel(original_vl_model.config)
         # original_vl_model.config.vision_config.temporal_patch_size = 1 # HACK: JJ
-        custom_vl_model.load_state_dict(original_vl_model.state_dict(), strict=True)        
+        # JJ : strict=False to allow new sdpa_gate params when gating is enabled
+        _strict = not getattr(config, 'enable_sdpa_gating', False)
+        _missing, _unexpected = custom_vl_model.load_state_dict(original_vl_model.state_dict(), strict=_strict)
+        if _missing:
+            print(f"[INFO] load_state_dict missing keys ({len(_missing)}): {_missing[:5]}...")
         print("[INFO] Load Qwen2_5 VLModel weights in CustomQwen2_5_VLModel successfully.")
         print("[INFO] CustomQwen2_5_VLModel temporal patch size:", custom_vl_model.config.vision_config.temporal_patch_size)
         self.model = custom_vl_model
-        
+
         # Add spatial components
         self.spatial_encoder = VGGTSpatialEncoderPreTrainedModel(config.spatial_config)
         print("[INFO] Init SpatialEncoder successfully.")
@@ -69,6 +75,11 @@ class CustomSpatialMLLMForConditionalGeneration(Qwen2_5_VLForConditionalGenerati
 
         # Initialize weights and apply final processing
         self.post_init()
+
+        # JJ : Initialize SDPA gate params AFTER post_init to prevent corruption
+        # weight=0, bias=4.0 → sigmoid(4)≈0.98 → near-identity at step 0
+        if getattr(config, 'enable_sdpa_gating', False):
+            self._init_sdpa_gates()
 
         # JJ: Manual control flag for connector fusion (set manually when training)
         # for effeciency if we only want PoseRoPE on qwen2.5VL model, not connector fusion
@@ -118,7 +129,22 @@ class CustomSpatialMLLMForConditionalGeneration(Qwen2_5_VLForConditionalGenerati
         # JJ: Track training step for NaN detection
         self.global_step = 0
         self.current_epoch = 0
-    
+
+    def _init_sdpa_gates(self):
+        """
+        JJ : Initialize SDPA gate params for safe finetune.
+        weight=0, bias=4.0 → sigmoid(0*x + 4)≈0.98 → near-identity at step 0.
+        Called once after load_state_dict when enable_sdpa_gating=True.
+        """
+        import torch.nn as nn
+        count = 0
+        for module in self.model.modules():
+            if hasattr(module, 'sdpa_gate') and isinstance(module.sdpa_gate, nn.Linear):
+                nn.init.zeros_(module.sdpa_gate.weight)
+                nn.init.constant_(module.sdpa_gate.bias, 4.0)
+                count += 1
+        print(f"[INFO] SDPA gating: initialized {count} gate layers (weight=0, bias=4.0 → sigmoid≈0.98)")
+
     def forward(
         self,
         input_ids: Optional[torch.LongTensor] = None,

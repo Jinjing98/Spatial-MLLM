@@ -59,6 +59,9 @@ MODEL_TYPE="spatial-mllm"
 # MODEL_TYPE="qwen3-vl"
 # MODEL_PATH="Qwen/Qwen3-VL-2B-Instruct"
 # MODEL_TYPE="spatial-mllm"
+# JJ : For QA eval of trained LVSM model, use custom-spatial-mllm-lvsm + your checkpoint path
+# MODEL_TYPE="custom-spatial-mllm-lvsm"
+# MODEL_PATH="/path/to/your/trained/checkpoint"
 MODEL_TYPE="custom-spatial-mllm"
 MODEL_PATH="Diankun/Spatial-MLLM-v1.1-Instruct-135K"
 

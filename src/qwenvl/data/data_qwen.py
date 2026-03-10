@@ -14,8 +14,11 @@ from dataclasses import dataclass, field
 from io import BytesIO
 from typing import Dict, List, Optional, Sequence, Tuple
 
+import warnings
+
 import numpy as np
 import torch
+import torch.nn.functional as F
 import transformers
 from decord import VideoReader
 from PIL import Image
@@ -116,6 +119,86 @@ def preprocess_qwen_2_visual(
         input_ids=input_ids,
         labels=targets,
     )
+
+
+# ================================================================
+# JJ : Temporal-merge-aware real-neighbour sampling helper
+# ================================================================
+def _add_real_neighbours(anchor_indices, neighbour_mode, max_step, total_frames):
+    """
+    JJ : For each anchor frame, add a real temporal neighbour.
+
+    The actual step is randomly sampled from [1, max_step] per anchor,
+    providing data-augmentation-style diversity across epochs.
+
+    Boundary handling:
+      - First anchor  → force 'after'  (avoid negative index)
+      - Last  anchor  → force 'before' (avoid exceeding total_frames)
+      - Middle anchors → use the specified neighbour_mode
+
+    Overlap handling:
+      - If neighbour overlaps with an adjacent anchor, duplicate the anchor instead.
+
+    Args:
+        anchor_indices: sorted list of anchor frame indices (into original video).
+        neighbour_mode: 'before', 'after', or 'random'.
+        max_step:       max frame-ID offset; actual step ~ randint(1, max_step).
+        total_frames:   total number of frames in the video.
+
+    Returns:
+        List[int]: sorted frame indices (anchors + neighbours), length = 2 * len(anchor_indices).
+    """
+    final = []
+    n = len(anchor_indices)
+
+    for i, fid in enumerate(anchor_indices):
+        is_first = (i == 0)
+        is_last  = (i == n - 1)
+
+        # Decide direction with boundary override
+        if is_first:
+            mode = "after"
+        elif is_last:
+            mode = "before"
+        else:
+            if neighbour_mode == "random":
+                mode = random.choice(["before", "after"])
+            else:
+                mode = neighbour_mode
+
+        # JJ : Random step within [1, max_step] per anchor
+        step = random.randint(1, max_step)
+
+        # Compute neighbour index
+        if mode == "before":
+            nid = fid - step
+            # Guard: out of bounds or overlaps with previous anchor
+            if nid < 0:
+                warnings.warn(
+                    f"[real_neighbour] {nid} < 0 for anchor {fid}, duplicating anchor.")
+                nid = fid
+            elif i > 0 and nid <= anchor_indices[i - 1]:
+                warnings.warn(
+                    f"[real_neighbour] {nid} overlaps with prev anchor "
+                    f"{anchor_indices[i - 1]}, duplicating anchor {fid}.")
+                nid = fid
+            final.extend([nid, fid])
+        else:  # "after"
+            nid = fid + step
+            # Guard: out of bounds or overlaps with next anchor
+            if nid >= total_frames:
+                warnings.warn(
+                    f"[real_neighbour] {nid} >= total_frames {total_frames} "
+                    f"for anchor {fid}, duplicating anchor.")
+                nid = fid
+            elif i < n - 1 and nid >= anchor_indices[i + 1]:
+                warnings.warn(
+                    f"[real_neighbour] {nid} overlaps with next anchor "
+                    f"{anchor_indices[i + 1]}, duplicating anchor {fid}.")
+                nid = fid
+            final.extend([fid, nid])
+
+    return sorted(final)
 
 
 class LazySupervisedDataset(Dataset):
@@ -255,7 +338,26 @@ class LazySupervisedDataset(Dataset):
         target_frames = min(
             max(num_frames_to_sample, video_min_frames), video_max_frames
         )
-        frame_idx = np.linspace(0, total_frames - 1, target_frames, dtype=int)
+
+        # JJ : Temporal-merge-aware real-neighbour sampling
+        enforce_real_nb = getattr(self.data_args, "sampling_enforce_real_neighbour", False)
+        if enforce_real_nb and target_frames >= 4 and total_frames >= 4:
+            n_anchors = target_frames // 2
+            anchor_idx = np.linspace(0, total_frames - 1, n_anchors, dtype=int)
+            anchor_idx = np.unique(anchor_idx).tolist()
+            nb_mode = getattr(self.data_args, "neighbour_mode", "random")
+            nb_max_step = getattr(self.data_args, "neighbour_max_step", 1)
+            frame_idx = np.array(
+                _add_real_neighbours(anchor_idx, nb_mode, nb_max_step, total_frames),
+                dtype=int,
+            )
+            # JJ : DEBUG — remove after verification
+            print(f"[real_neighbour] total={total_frames} target={target_frames} "
+                  f"anchors({len(anchor_idx)})={anchor_idx} → "
+                  f"final({len(frame_idx)})={frame_idx.tolist()}")
+        else:
+            frame_idx = np.linspace(0, total_frames - 1, target_frames, dtype=int)
+
         frame_idx = np.unique(frame_idx)
         video = vr.get_batch(frame_idx).asnumpy()
         fps = getattr(self.data_args, "video_frame_fps", None)
@@ -279,7 +381,121 @@ class LazySupervisedDataset(Dataset):
         second_per_grid_ts = [
             self.data_args.image_processor.temporal_patch_size / fps
         ] * len(grid_thw)
-        return video_tensor, grid_thw, second_per_grid_ts, video_tchw
+        # JJ : Return frame_idx so NVS can use actual input indices
+        return video_tensor, grid_thw, second_per_grid_ts, video_tchw, frame_idx
+
+    # ================================================================
+    # JJ : Sample novel target frames for NVS (between consecutive input frames)
+    # ================================================================
+    def _get_nvs_target_frames(self, video_file, input_video_tchw,
+                               input_frame_indices=None):
+        """
+        JJ : Sample novel target frames from gaps between consecutive input frames.
+        Re-opens the video to read intermediate frames. Skips gaps with no space.
+
+        When input_frame_indices is provided (from process_video), uses those
+        exact indices so NVS targets never overlap with actual input frames.
+        Otherwise falls back to re-deriving indices via np.linspace (legacy).
+
+        Args:
+            video_file:           str  - full path to video file
+            input_video_tchw:     [T, C, H, W] tensor - input frames
+            input_frame_indices:  np.ndarray | list | None - actual frame
+                                  indices used by process_video (sorted, unique)
+
+        Returns:
+            nvs_target_tchw:    [N_tgt, C, H, W] tensor or None
+            nvs_is_input_mask:  [N_in + N_tgt] bool tensor or None
+                True = input frame position, False = target frame position
+        """
+        vr = VideoReader(video_file, num_threads=4)
+        total_frames = len(vr)
+
+        # ------------------------------------------------------------------
+        # JJ : Determine input frame indices
+        # ------------------------------------------------------------------
+        if input_frame_indices is not None:
+            # Use actual indices from process_video (already sorted & unique)
+            frame_idx = np.asarray(input_frame_indices, dtype=int)
+        else:
+            # Legacy fallback: re-derive with np.linspace
+            avg_fps = vr.get_avg_fps()
+            video_length = total_frames / avg_fps
+            interval = getattr(self.data_args, "base_interval", 4)
+            num_frames_to_sample = round(video_length / interval)
+            video_min_frames = getattr(self.data_args, "video_min_frames", 4)
+            video_max_frames = getattr(self.data_args, "video_max_frames", 8)
+            target_frames_count = min(
+                max(num_frames_to_sample, video_min_frames), video_max_frames
+            )
+            frame_idx = np.linspace(0, total_frames - 1, target_frames_count, dtype=int)
+            frame_idx = np.unique(frame_idx)
+
+        N_in = len(frame_idx)
+        input_set = set(frame_idx.tolist())
+
+        # ------------------------------------------------------------------
+        # JJ : Gap-based sampling — one novel frame per gap between consecutive
+        #      input frames.  With real-neighbour input, tight pairs (e.g.
+        #      anchor=6, neighbour=7) have no gap and are automatically skipped,
+        #      so NVS targets land only in informative wide gaps.
+        # ------------------------------------------------------------------
+        target_indices = []
+        target_slot_map = []  # which gap each target belongs to
+        for k in range(N_in - 1):
+            lo = int(frame_idx[k]) + 1
+            hi = int(frame_idx[k + 1])
+            if lo < hi:
+                target_indices.append(random.randint(lo, hi - 1))
+                target_slot_map.append(k)
+
+        # JJ : Fallback — if all gaps are tight, sample from any non-input frame
+        if not target_indices:
+            available = sorted(set(range(total_frames)) - input_set)
+            if not available:
+                return None, None
+            n_sample = min(max(1, N_in - 1), len(available))
+            target_indices = sorted(random.sample(available, n_sample))
+            # Build slot_map: insert each target after its closest preceding input
+            target_slot_map = []
+            for tidx in target_indices:
+                slot = 0
+                for k in range(N_in):
+                    if frame_idx[k] <= tidx:
+                        slot = k
+                    else:
+                        break
+                target_slot_map.append(min(slot, N_in - 2))
+
+        N_tgt = len(target_indices)
+        target_frames_data = vr.get_batch(target_indices).asnumpy()  # [N_tgt, H, W, 3]
+
+        # JJ : Convert to [N_tgt, 3, H, W] float [0,1]
+        target_tensor = (
+            torch.from_numpy(target_frames_data.copy())
+            .permute(0, 3, 1, 2)
+            .float()
+            / 255.0
+        )
+
+        # JJ : Resize to match input video resolution (needed for VGGT interleaving)
+        _, _, H, W = input_video_tchw.shape
+        if target_tensor.shape[2] != H or target_tensor.shape[3] != W:
+            target_tensor = F.interpolate(
+                target_tensor, size=(H, W), mode="bilinear", align_corners=False
+            )
+
+        # JJ : Build interleave mask (True=input, False=target, in temporal order)
+        # Use `while` so multiple targets sharing the same slot are all placed.
+        is_input_mask = []
+        tgt_ptr = 0
+        for k in range(N_in):
+            is_input_mask.append(True)
+            while tgt_ptr < N_tgt and target_slot_map[tgt_ptr] == k:
+                is_input_mask.append(False)
+                tgt_ptr += 1
+
+        return target_tensor, torch.tensor(is_input_mask, dtype=torch.bool)
 
     def __getitem__(self, i) -> Dict[str, torch.Tensor]:
         num_base_retries = 3
@@ -364,21 +580,22 @@ class LazySupervisedDataset(Dataset):
             # JJ: Use video_root if specified, otherwise use data_path
             video_folder = self.list_data_dict[i].get("video_root", self.list_data_dict[i]["data_path"])
             video_file = self.list_data_dict[i]["video"]
+            _video_frame_idx = None  # JJ : Actual frame indices; set for single-video, None for multi-video
             if isinstance(video_file, List):
                 if len(video_file) > 1:
                     video_file = [
                         os.path.join(video_folder, file) for file in video_file
                     ]
                     results = [self.process_video(file) for file in video_file]
-                    video, grid_thw, second_per_grid_ts, video_tchw = zip(*results)
+                    video, grid_thw, second_per_grid_ts, video_tchw, _ = zip(*results)
                 else:
                     video_file = video_file[0]
                     video_file = os.path.join(video_folder, video_file)
-                    video, grid_thw, second_per_grid_ts, video_tchw = self.process_video(video_file)
+                    video, grid_thw, second_per_grid_ts, video_tchw, _video_frame_idx = self.process_video(video_file)
                     video = [video]
             else:
                 video_file = os.path.join(video_folder, video_file)
-                video, grid_thw, second_per_grid_ts, video_tchw = self.process_video(video_file)
+                video, grid_thw, second_per_grid_ts, video_tchw, _video_frame_idx = self.process_video(video_file)
                 video = [video]
             grid_thw_merged = copy.deepcopy(grid_thw)
             if not isinstance(grid_thw, Sequence):
@@ -427,6 +644,18 @@ class LazySupervisedDataset(Dataset):
             data_dict["pixel_values_videos"] = video
             data_dict["video_grid_thw"] = grid_thw
             data_dict["video_tchw"] = video_tchw
+
+            # JJ : Sample NVS target frames if enabled (for novel view synthesis)
+            # Only supports single-video input; multi-video NVS is not supported.
+            _nvs_tchw = video_tchw[0] if isinstance(video_tchw, (tuple, list)) else video_tchw
+            if getattr(self.data_args, "nvs_enabled", False) and _nvs_tchw is not None and isinstance(_nvs_tchw, torch.Tensor):
+                _nvs_vf = video_file if isinstance(video_file, str) else video_file[0]
+                nvs_tgt, nvs_mask = self._get_nvs_target_frames(
+                    _nvs_vf, _nvs_tchw, input_frame_indices=_video_frame_idx
+                )
+                if nvs_tgt is not None:
+                    data_dict["nvs_target_tchw"] = nvs_tgt
+                    data_dict["nvs_is_input_mask"] = nvs_mask
 
         return data_dict
 
@@ -534,6 +763,15 @@ class DataCollatorForSupervisedDataset(object):
             batch["image_tchw"] = image_tchw
         if video_tchw is not None:
             batch["video_tchw"] = video_tchw
+
+        # JJ : NVS target frames (list of tensors, variable length per sample)
+        nvs_target_tchw = [instance["nvs_target_tchw"] for instance in instances if "nvs_target_tchw" in instance]
+        nvs_is_input_mask = [instance["nvs_is_input_mask"] for instance in instances if "nvs_is_input_mask" in instance]
+        if nvs_target_tchw:
+            batch["nvs_target_tchw"] = nvs_target_tchw
+        if nvs_is_input_mask:
+            batch["nvs_is_input_mask"] = nvs_is_input_mask
+
         return batch
 
 

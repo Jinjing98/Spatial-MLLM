@@ -94,6 +94,34 @@ def load_model_and_processor(model_type: str, model_path: str, use_visual=None, 
         processor = Qwen3VLProcessor.from_pretrained(model_path, use_fast=True)
         return model, processor
     
+    # JJ : custom-spatial-mllm-lvsm — QA-only eval (NVS branch disabled)
+    elif model_type == "custom-spatial-mllm-lvsm":
+        from src.custom_qwenvl.model.custom_spatial_mllm_lvsm import (
+            CustomSpatialMLLMLVSMConfig,
+            CustomSpatialMLLMLVSMForConditionalGeneration,
+        )
+        from transformers import Qwen2_5_VLProcessor
+
+        config = CustomSpatialMLLMLVSMConfig.from_pretrained(model_path)
+        config = eval_altering_connector_config(config, use_visual=use_visual, use_geo=use_geo)
+        # JJ : Disable NVS loss modules to avoid VGG weight file dependency at eval time
+        if hasattr(config, 'lvsm_config') and isinstance(config.lvsm_config, dict):
+            config.lvsm_config['perceptual_loss_weight'] = 0.0
+            config.lvsm_config['lpips_loss_weight'] = 0.0
+            config.lvsm_config['enforce_LVSM'] = False
+        model = CustomSpatialMLLMLVSMForConditionalGeneration.from_pretrained(
+            model_path,
+            config=config,
+            torch_dtype="bfloat16",
+            device_map="cuda",
+            attn_implementation="flash_attention_2",
+        )
+        # JJ : Ensure NVS branch is off during generation
+        model.enforce_LVSM = False
+        hf_processor_path = 'Diankun/Spatial-MLLM-v1.1-Instruct-135K'
+        processor = Qwen2_5_VLProcessor.from_pretrained(hf_processor_path, use_fast=True)
+        return model, processor
+
     elif model_type == "spatial-mllm-qwen3":
         from transformers import Qwen3VLProcessor
         from src.custom_qwen3vl.model.spatial_mllm_qwen3 import SpatialMLLMQwen3ForConditionalGeneration

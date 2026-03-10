@@ -6,6 +6,7 @@ from transformers.cache_utils import Cache
 from transformers.modeling_flash_attention_utils import _flash_attention_forward
 from transformers.utils import is_flash_attn_greater_or_equal_2_10, logging
 import torch.nn as nn
+import torch.nn.functional as F
 
 # Import pose-aware rotary embedding utilities
 from src.custom_qwenvl.model.custom_RoPE_utils import apply_poseaware_rotary, apply_poseaware_output_transform
@@ -203,9 +204,13 @@ class CustomQwen2_5_VLAttention(nn.Module):
         # self.rotary_emb = Qwen2_5_VLRotaryEmbedding(config=config)
         
         # ============ CUSTOMIZATION POINT 1: Add spatial components ============
-        # Add your spatial attention modules here, e.g.:
-        # self.spatial_encoder = SpatialEncoder(...)
-        # self.spatial_gate = nn.Linear(...)
+        # JJ : SDPA output gating (arxiv 2505.06708)
+        # Element-wise sigmoid gate after attention output, before o_proj.
+        # Introduces non-linearity + query-dependent sparsity into attention.
+        # Init: weight=0, bias=4.0 → sigmoid(4)≈0.98 → near-identity at start.
+        self._enable_sdpa_gating = getattr(config, 'enable_sdpa_gating', False)
+        if self._enable_sdpa_gating:
+            self.sdpa_gate = nn.Linear(self.hidden_size, self.hidden_size, bias=True)
         # =======================================================================
 
     def forward(
@@ -308,8 +313,10 @@ class CustomQwen2_5_VLAttention(nn.Module):
         attn_output = attn_output.reshape(bsz, q_len, -1)
 
         # ============ CUSTOMIZATION POINT 7: Pre-projection spatial fusion ============
-        # Optional: Fuse spatial features before final projection (if needed)
-        # attn_output = self.fuse_spatial_features(attn_output, **kwargs)
+        # JJ : SDPA output gating — element-wise sigmoid gate (arxiv 2505.06708)
+        if self._enable_sdpa_gating:
+            gate = torch.sigmoid(self.sdpa_gate(attn_output))
+            attn_output = attn_output * gate
         # ==============================================================================
 
         attn_output = self.o_proj(attn_output)
@@ -460,8 +467,10 @@ class CustomQwen2_5_VLFlashAttention2(CustomQwen2_5_VLAttention):
         attn_output = attn_output.reshape(bsz, q_len, self.hidden_size).contiguous()
         
         # ============ CUSTOMIZATION POINT 6: Pre-projection spatial fusion ============
-        # Optional: Fuse spatial features before final projection (if needed)
-        # attn_output = self.fuse_spatial_features(attn_output, **kwargs)
+        # JJ : SDPA output gating — element-wise sigmoid gate (arxiv 2505.06708)
+        if self._enable_sdpa_gating:
+            gate = torch.sigmoid(self.sdpa_gate(attn_output))
+            attn_output = attn_output * gate
         # ==============================================================================
         
         attn_output = self.o_proj(attn_output)
