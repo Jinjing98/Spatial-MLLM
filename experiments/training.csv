@@ -1,2 +1,3 @@
 exp_id,date,job_id,config,gpus,checkpoint,status
 lvsm_01,2026-03-17,3076680,sp133k+rp2k_enfNbr_pthw_lvsm+nvs | lr=7e-6, adaptor_lr=2e-5, gating=False,4,/data/horse/ws/jixu233b-metadata_ws/exps/train/spatialmllm/20260317_...,completed
+lvsm_02,2026-03-19,tmux_c1_20260319_175644,sp133k%1+rp2k%1 | MODEL_TYPE=custom-spatial-mllm-lvsm | RUN_NAME_APPENDIX=_8sa_knowview_nvsloss_celoss_lre-4_decodefromllm_overfit20 | lr=1e-5 | adaptor_lr=2e-5 | overfit=8 samples,1,/data/horse/ws/jixu233b-metadata_ws/exps/train/spatialmllm/20260319_175221_spatial-mllm-sft_8sa_knowview_nvsloss_celoss_lre-4_decodefromllm_overfit20,submitted

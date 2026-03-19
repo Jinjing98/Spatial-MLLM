@@ -1,2 +1,3 @@
 eval_id,exp_id_ref,date,job_id,test_config,status
-lvsm_01_eval_01,lvsm_01,2026-03-18,3076703,16f_mergeaware_sa_arkitscenes+scannet | MODEL_NAME_SUFFIX修改, scene_filter=42446103,completed
+eval_001,lvsm_01,2026-03-19,3175563,"trend.sh | nframe=16 | sampling=uniform_sampling | model_type=custom-spatial-mllm-lvsm | model_search=*141138*,*223914* | ckpt_steps=528,8446 | datasets=arkitscenes | question_types=object_rel_distance | scenes=42446103",submitted
+eval_002,lvsm_01,2026-03-19,3175703,"trend.sh | nframe=16 | sampling=uniform_sampling | model_type=custom-spatial-mllm-lvsm | model_search=*141138*,*223914* | ckpt_steps=528,8446 | datasets=arkitscenes | question_types=object_rel_distance | scenes=42446103",submitted

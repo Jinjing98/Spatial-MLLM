@@ -80,12 +80,13 @@ GRADIENT_CHECKPOINTING=True # default False
 MODEL_TYPE="custom-spatial-mllm-lvsm"
 PRETRAINED_MODEL_NAME_OR_PATH="Qwen/Qwen2.5-VL-3B-Instruct"
 
+# RUN_NAME_APPENDIX="_8sa_knowview_nvsloss_decodefromllmMid"
+
 # RUN_NAME_APPENDIX="_8sa_knowview_nvsloss_decodefromllm"
 # RUN_NAME_APPENDIX="_8sa_knowview_nvsloss_decodefromrandom"
 # RUN_NAME_APPENDIX="_8sa_knowview_nvsloss_decodefromclip"
-
-RUN_NAME_APPENDIX="_8sa_knowview_nvsloss_decodefromvggt"
-# RUN_NAME_APPENDIX="_8sa_knowview_nvsloss_decodefromllmMid"
+# RUN_NAME_APPENDIX="_8sa_knowview_nvsloss_decodefromvggt"
+RUN_NAME_APPENDIX="_8sa_knowview_nvsloss_celoss_lre-4_decodefromllm"
 
 #tmux1 3173410  _8sa_knowview_nvsloss_decodefromrandom
 #tmux0 3173413  _8sa_knowview_nvsloss_decodefromllm
@@ -109,6 +110,7 @@ LOGGING_STEPS_OVERFIT=1
 NVS_IMG_LOG_INTERVAL_OVERFIT=5
 # wo warming up & constant high lr for of
 LR_SCHEDULER_TYPE_OVERFIT="constant_with_warmup" # default "cosine" #
+LR_OVERFIT=1e-5
 WARMUP_RATIO_OVERFIT=0.0
 EPOCHS_OVERFIT=10000
 
@@ -222,6 +224,7 @@ if [ "${OVERFIT_MODE}" = "true" ] || [ "${OVERFIT_MODE}" = "True" ]; then
     LR_SCHEDULER_TYPE=${LR_SCHEDULER_TYPE_OVERFIT}
     WARMUP_RATIO=${WARMUP_RATIO_OVERFIT}
     TRAIN_EPOCHS=${EPOCHS_OVERFIT}
+    lr=${LR_OVERFIT}
     RUN_NAME_APPENDIX="${RUN_NAME_APPENDIX}_overfit20"
     echo "[Overfit] Enabled: max_train_samples=${OVERFIT_MAX_TRAIN_SAMPLES}, save_strategy=${SAVE_STRATEGY}, logging_steps=${LOGGING_STEPS}, nvs_img_log_interval=${NVS_IMG_LOG_INTERVAL}, wandb_project=${WANDB_PROJECT}"
 fi

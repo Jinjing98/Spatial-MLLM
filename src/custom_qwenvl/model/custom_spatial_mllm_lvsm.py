@@ -189,8 +189,8 @@ class CustomSpatialMLLMLVSMForConditionalGeneration(CustomSpatialMLLMForConditio
 
         #/////debug
         #///used when inject vggt geo feat
-        self.disable_lvsm2llm_fusion = False#True
-        self.disable_llm2lvsm_fusion = False#True
+        self.disable_lvsm2llm_fusion = True
+        self.disable_llm2lvsm_fusion = True
         self.nvs_loss_only = False#True
 
         # JJ: mirror connector geometry attrs for decoder_input_vggt_geo path
@@ -198,7 +198,7 @@ class CustomSpatialMLLMLVSMForConditionalGeneration(CustomSpatialMLLMForConditio
         self.visual_temporal_merge_size = 2
         self.visual_spatial_merge_size = 2
 
-        self.decoder_input_llm_layer = False
+        self.decoder_input_llm_layer = True
         self.random_reset_decoder_input_token =False
         self.decoder_input_vggt_geo = False#True
         if self.decoder_input_vggt_geo:
@@ -211,9 +211,9 @@ class CustomSpatialMLLMLVSMForConditionalGeneration(CustomSpatialMLLMForConditio
             self.vggt_geo_norm = nn.LayerNorm(self.vggt_geo_in_dim)
             self.vggt_geo_proj = nn.Linear(self.vggt_geo_in_dim, config.hidden_size)
 
-        self.decoder_input_which_llm_layer = 0 # self.model.config.num_hidden_layers + 1 36+1
+        # self.decoder_input_which_llm_layer = 0 # self.model.config.num_hidden_layers + 1 36+1
         # self.decoder_input_which_llm_layer = int((self.model.config.num_hidden_layers)//2) # self.model.config.num_hidden_layers + 1 36+1
-        # self.decoder_input_which_llm_layer = -1 # self.model.config.num_hidden_layers + 1 36+1
+        self.decoder_input_which_llm_layer = -1 # self.model.config.num_hidden_layers + 1 36+1
 
     # ================================================================
     # JJ : Load LVSM pretrained weights (must be called AFTER from_pretrained)
