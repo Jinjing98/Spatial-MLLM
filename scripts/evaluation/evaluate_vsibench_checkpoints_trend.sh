@@ -44,6 +44,22 @@ set -euo pipefail
 # export MODEL_DIRS_CSV='run_a,run_b'
 # bash scripts/evaluation/evaluate_vsibench_checkpoints_trend.sh
 
+# JJ: follow existing HPC bootstrap style used in other evaluation scripts.
+source /software/rapids/r24.10/Anaconda3/2024.02-1/etc/profile.d/conda.sh
+conda activate /data/horse/ws/jixu233b-3d_ws/envs/spatial-mllm
+module load release/24.04
+module load CUDA/12.4.0
+export TRITON_CACHE_DIR=/tmp/triton_cache_${USER}
+mkdir -p $TRITON_CACHE_DIR
+
+# JJ: align run-directory handling with other eval scripts.
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+REPO_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
+cd "$REPO_ROOT"
+if [[ -n "${SLURM_SUBMIT_DIR:-}" ]]; then
+  cd "$SLURM_SUBMIT_DIR"
+fi
+
 #############################
 # User Editable Config Zone #
 #############################
