@@ -187,11 +187,11 @@ class CustomSpatialMLLMLVSMForConditionalGeneration(CustomSpatialMLLMForConditio
         self._diag_lvsm2llm_delta_ratio = None
         self._diag_llm2lvsm_delta_ratio = None
 
-        # debug
+        #/////debug
         #///used when inject vggt geo feat
-        self.disable_lvsm2llm_fusion = True
-        self.disable_llm2lvsm_fusion = True
-        self.nvs_loss_only = True
+        self.disable_lvsm2llm_fusion = False#True
+        self.disable_llm2lvsm_fusion = False#True
+        self.nvs_loss_only = False#True
 
         # JJ: mirror connector geometry attrs for decoder_input_vggt_geo path
         self.spatial_embeds_layer_idx = -1
@@ -200,7 +200,7 @@ class CustomSpatialMLLMLVSMForConditionalGeneration(CustomSpatialMLLMForConditio
 
         self.decoder_input_llm_layer = False
         self.random_reset_decoder_input_token =False
-        self.decoder_input_vggt_geo = True
+        self.decoder_input_vggt_geo = False#True
         if self.decoder_input_vggt_geo:
             # JJ: Bridge VGGT geometric packed tokens -> Qwen width so existing llm2lvsm projector can be reused.
             # Use for debugging how far the clip is from mvg vit.
@@ -211,10 +211,10 @@ class CustomSpatialMLLMLVSMForConditionalGeneration(CustomSpatialMLLMForConditio
             self.vggt_geo_norm = nn.LayerNorm(self.vggt_geo_in_dim)
             self.vggt_geo_proj = nn.Linear(self.vggt_geo_in_dim, config.hidden_size)
 
-
         self.decoder_input_which_llm_layer = 0 # self.model.config.num_hidden_layers + 1 36+1
         # self.decoder_input_which_llm_layer = int((self.model.config.num_hidden_layers)//2) # self.model.config.num_hidden_layers + 1 36+1
         # self.decoder_input_which_llm_layer = -1 # self.model.config.num_hidden_layers + 1 36+1
+
     # ================================================================
     # JJ : Load LVSM pretrained weights (must be called AFTER from_pretrained)
     # ================================================================
@@ -1326,6 +1326,7 @@ class CustomSpatialMLLMLVSMForConditionalGeneration(CustomSpatialMLLMForConditio
                             logger.error(f"Failed to extract hidden states from layer {self.decoder_input_which_llm_layer}: {e}")
                             raise
                     else:
+                        # Path of previous trained LVSM vlm
                         hidden_states = outputs[0]
 
                     visual_hidden = hidden_states[_video_token_mask]  # [L_vis, d_qwen]

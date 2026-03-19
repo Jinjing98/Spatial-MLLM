@@ -1,0 +1,2 @@
+exp_id,date,job_id,config,gpus,checkpoint,status
+lvsm_01,2026-03-17,3076680,sp133k+rp2k_enfNbr_pthw_lvsm+nvs | lr=7e-6, adaptor_lr=2e-5, gating=False,4,/data/horse/ws/jixu233b-metadata_ws/exps/train/spatialmllm/20260317_...,completed
