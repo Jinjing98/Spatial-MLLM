@@ -114,10 +114,22 @@ def prepare_chat_batch(
     batch_messages = [[msg] for msg, _ in batch_messages_and_frames]
     batch_selected_frames = [frames for _, frames in batch_messages_and_frames]# JJ
 
+    # JJ: IMPORTANT - qwen2.5-vl and qwen3-vl behave differently in apply_chat_template when no explicit system message is provided:
+    #   - qwen2.5-vl template auto-inserts default system text ("You are a helpful assistant.") if first role != system.
+    #   - qwen3-vl template does NOT auto-insert that default system text.
+    #   This can create inconsistent prompt policy across models during evaluation.
+    #   If you need consistent/fair comparison, explicitly prepend a system message for BOTH models
+    #   (same non-empty text for both, or same empty string for both).
+    
+    # system_msg = "You are a helpful assistant for answering questions based on the video provided, do not imagine anything beyond the video content."
+    # batch_messages = [[{"role": "system", "content": system_msg}, msg] for msg, _ in batch_messages_and_frames]
+    # batch_messages = [[{"role": "system", "content": ""}, msg] for msg, _ in batch_messages_and_frames]
     prompts_text = [
         processor.apply_chat_template(example, tokenize=False, add_generation_prompt=True) for example in batch_messages
     ]
     prompts_text_copy = prompts_text.copy()
+    
+    # print(f"[Debug]: Sample prompt text:\n{prompts_text[0]}\n{'-'*50}")
 
     # JJ : Split vision processing by model type (qwen3-vl needs extract_vision_info + gen_videos_metadata)
     if model_type in ["qwen3-vl", "spatial-mllm-qwen3"]:
