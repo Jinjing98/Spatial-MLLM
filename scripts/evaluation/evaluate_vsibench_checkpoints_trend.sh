@@ -55,10 +55,10 @@ SFT_MODELS_ROOT="/data/horse/ws/jixu233b-metadata_ws/exps/train/spatialmllm"
 EVAL_RESULTS_BASE="/data/horse/ws/jixu233b-metadata_ws/exps/stats/spatialmllm_results/results_trends"
 
 # Part 2/4: 评估对象与筛选范围（定义模型选择、checkpoint 选择、数据子集选择）
-MODEL_TYPE="${MODEL_TYPE-custom-spatial-mllm}"
+MODEL_TYPE="${MODEL_TYPE-custom-spatial-mllm-lvsm}"  # e.g. "custom-spatial-mllm-lvsm", "qwen2.5-vl", "qwen3-vl"; used for both model search and eval config
 # Supports one or multiple patterns (comma separated), e.g.
 # "20260301*baseline*,20260302*ablation*"
-MODEL_SEARCH_PATTERN="${MODEL_SEARCH_PATTERN-20260301_135514_spatial-mllm-sft_baseline_sp133krp2k}"
+MODEL_SEARCH_PATTERN="${MODEL_SEARCH_PATTERN-*141138*,*223914*}"
 # will ignore MODEL_SEARCH_PATTERN if MODEL_DIRS_CSV is not empty
 # JJ: model selection vars support both external env override and in-script default edits.
 MODEL_DIRS_CSV="${MODEL_DIRS_CSV-}"  # optional concrete model dirs, comma separated; entry can be abs path or dir name under SFT_MODELS_ROOT
@@ -79,9 +79,11 @@ INCLUDE_FINAL_MODEL=0            # final model root optional; x-axis is checkpoi
 PLOT_TREND=1
 PLOT_COMBINED=1
 LIVE_PLOT_WHILE_EVAL=1           # 1: when RUN_EVAL=1, refresh trend plots after each new metrics point
-PLOT_METRICS_CSV="all:micro,all:macro"  # e.g. "all:micro,all:macro,acc:micro,mra:macro"
-SAMPLING="mergeaware_sa_sampling"
-MERGEAWARE_DETAILS="_rnd_idxss1"
+PLOT_METRICS_CSV="all:micro,all:macro,acc:micro,mra:macro"  # e.g. "all:micro,all:macro,acc:micro,mra:macro"
+# SAMPLING="mergeaware_sa_sampling"
+# MERGEAWARE_DETAILS="_rnd_idxss1"
+SAMPLING="uniform_sampling"
+MERGEAWARE_DETAILS=""
 NFRAMES_LIST="16"                # space separated, e.g. "8 16 32"
 
 # Part 4/4: 脚本入口与输出目录组织（定义调用脚本路径与结果落盘路径）
