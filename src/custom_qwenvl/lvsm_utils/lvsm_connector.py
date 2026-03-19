@@ -4,14 +4,12 @@ JJ : LVSMConnector — the ONLY new learnable module for LVSM integration.
 Bridges QwenVL visual tokens (d=2048) with LVSM tokens (d=768) in two directions:
 
   Phase-3  (LVSM → LLM):   fuse_for_llm()
-  Phase-5  (LLM → LVSM):   per-view modulation via
-                            extract_per_view_feat()  +  modulate_lvsm_context()
+  Phase-5  (LLM → LVSM):   patch residual via
+                            project_visual_tokens_to_lvsm() + fuse_patch_residual_context()
 
-Design note (per-view modulation):
-  Instead of mapping LLM hidden → patch-level LVSM delta (hard + unstable),
-  we modulate the frozen lvsm_base_context *per view* with gamma/beta derived
-  from spatially-pooled LLM features.  This forces the LLM to encode view-level
-  awareness while keeping the LVSM prior stable.
+Design note (patch residual):
+  LLM visual tokens are projected to LVSM channels and upsampled to LVSM patch grid,
+  then fused as gated residual on top of frozen lvsm_base_context.
 """
 
 import logging
@@ -42,6 +40,7 @@ class LVSMConnector(nn.Module):
         lvsm_spatial_size=32,  # 256 / 8 = 32 patches per spatial dim
         lvsm2qwen_type="linear",
         llm2lvsm_type="linear",
+        vlm2context_adapt_strategy="patch_residual",
     ):
         super().__init__()
 
@@ -56,37 +55,130 @@ class LVSMConnector(nn.Module):
         self.lvsm_n_patches = lvsm_spatial_size ** 2  # 1024 patches per frame
         self.lvsm2qwen_type = lvsm2qwen_type
         self.llm2lvsm_type = llm2lvsm_type
+        self.vlm2context_adapt_strategy = vlm2context_adapt_strategy
 
         # ============================================================
         # [B] Phase-3: LVSM → QwenVL  (fuse_for_llm)
         # ============================================================
-        if lvsm2qwen_type == "linear":
-            self.lvsm_norm = nn.LayerNorm(d_lvsm)
-            self.lvsm_proj = nn.Linear(d_lvsm, d_qwen)
-        else:
-            raise NotImplementedError(
-                f"lvsm2qwen_type='{lvsm2qwen_type}' not supported. Choose from: 'linear'."
-            )
-        self.lvsm_delta_scale = 1.0 / math.sqrt(d_qwen)
-        # JJ : gates LVSM→LLM contribution; 0-init → identity at start
-        self.nvs_gate = nn.Parameter(torch.zeros(1))
+        self._init_lvsm2qwen_adapter()
 
         # ============================================================
-        # [C] Phase-5: LLM → LVSM  (per-view FiLM modulation)
+        # [C] Phase-5: LLM → LVSM
         # ============================================================
-        if llm2lvsm_type == "linear":
-            # C.1  Per-view feature extraction: pool + project visual_hidden → [B, N, d_lvsm]
-            self.view_norm = nn.LayerNorm(d_qwen)
-            self.view_proj = nn.Linear(d_qwen, d_lvsm)
+        self._init_llm2lvsm_adapter()
+
+    def _init_lvsm2qwen_adapter(self) -> None:
+        if self.lvsm2qwen_type == "linear":
+            self.lvsm_norm = nn.LayerNorm(self.d_lvsm)
+            self.lvsm_proj = nn.Linear(self.d_lvsm, self.d_qwen)
         else:
             raise NotImplementedError(
-                f"llm2lvsm_type='{llm2lvsm_type}' not supported. Choose from: 'linear'."
+                f"lvsm2qwen_type='{self.lvsm2qwen_type}' not supported. Choose from: 'linear'."
             )
-        # C.2  FiLM heads: generate gamma / beta per view
-        self.gamma_head = nn.Linear(d_lvsm, d_lvsm)
-        self.beta_head = nn.Linear(d_lvsm, d_lvsm)
-        # C.3  Modulation gate; 0-init → identity (base only) at start
-        self.mod_gate = nn.Parameter(torch.zeros(1))
+        self.lvsm_delta_scale = 1.0 / math.sqrt(self.d_qwen)
+        # JJ : Gates LVSM→LLM contribution; small init so gradient flows from step 0.
+        self.nvs_gate = nn.Parameter(torch.full((1,), 0.1))
+
+    def _init_llm2lvsm_adapter(self) -> None:
+        # Keep attributes explicit for readability and checkpoint compatibility.
+        self.view_norm = None
+        self.view_proj = None
+        self.gamma_head = None
+        self.beta_head = None
+
+        if self.llm2lvsm_type == "linear":
+            # Per-view feature extraction: pool + project visual_hidden -> [B, N, d_lvsm]
+            self.view_norm = nn.LayerNorm(self.d_qwen)
+            self.view_proj = nn.Linear(self.d_qwen, self.d_lvsm)
+        elif self.llm2lvsm_type == "cross_attn":
+            self._init_cross_attn_placeholder()
+        else:
+            raise NotImplementedError(
+                f"llm2lvsm_type='{self.llm2lvsm_type}' not supported. "
+                f"Choose from: 'linear', 'cross_attn'."
+            )
+
+        if self.vlm2context_adapt_strategy != "patch_residual":
+            raise NotImplementedError(
+                f"vlm2context_adapt_strategy='{self.vlm2context_adapt_strategy}' not supported. "
+                f"Only 'patch_residual' is supported."
+            )
+
+        # Shared modulation gate for Phase-5 adaptation branches.
+        self.mod_gate = nn.Parameter(torch.full((1,), 0.1))
+
+    def _init_cross_attn_placeholder(self) -> None:
+        # Standalone cross-attention branch: placeholder only for now.
+        self.cross_attn = None
+        raise NotImplementedError(
+            "llm2lvsm_type='cross_attn' is reserved as a standalone branch and not implemented yet."
+        )
+
+    @torch.amp.autocast('cuda', enabled=False)
+    def project_visual_tokens_to_lvsm(self, visual_hidden):
+        """
+        Project flat LLM visual tokens to LVSM channel dimension without pooling.
+
+        TODO: Stronger patch_residual ablation to try here:
+        replace the current token-wise `LN + Linear(2048->768)` before spatial
+        upsampling with `LN -> bilinear upsample -> projection`, so the branch
+        restores 2D layout first and compresses channels afterward.
+
+        Args:
+            visual_hidden: [L_vis, d_qwen] or [B, L_vis, d_qwen]
+
+        Returns:
+            llm_delta: [B, L_vis, d_lvsm] (fp32)
+        """
+        if self.llm2lvsm_type != "linear" or self.view_norm is None or self.view_proj is None:
+            raise RuntimeError(
+                "project_visual_tokens_to_lvsm requires llm2lvsm_type='linear' with initialized view_norm/view_proj."
+            )
+
+        if visual_hidden.dim() == 2:
+            visual_hidden = visual_hidden.unsqueeze(0)  # [1, L_vis, d_qwen]
+
+        x = visual_hidden.float()
+        w_ln = self.view_norm.weight.float()
+        b_ln = self.view_norm.bias.float() if self.view_norm.bias is not None else None
+        normed = F.layer_norm(
+            x,
+            normalized_shape=(self.d_qwen,),
+            weight=w_ln,
+            bias=b_ln,
+            eps=self.view_norm.eps,
+        )
+        w_proj = self.view_proj.weight.float()
+        b_proj = self.view_proj.bias.float() if self.view_proj.bias is not None else None
+        llm_delta = F.linear(normed, w_proj, b_proj)
+        return torch.nan_to_num(llm_delta, nan=0.0, posinf=0.0, neginf=0.0)
+
+    def fuse_patch_residual_context(self, lvsm_base_context, patch_delta):
+        """
+        Patch-wise residual fusion:
+            ctx = base + tanh(mod_gate) * patch_delta
+
+        Args:
+            lvsm_base_context: [B, N*P, d_lvsm]
+            patch_delta:       [B, N*P, d_lvsm]
+
+        Returns:
+            lvsm_context:      [B, N*P, d_lvsm]
+        """
+        if lvsm_base_context.shape != patch_delta.shape:
+            raise ValueError(
+                f"[patch_residual] shape mismatch: base={tuple(lvsm_base_context.shape)} "
+                f"delta={tuple(patch_delta.shape)}"
+            )
+
+        gate = torch.nan_to_num(torch.tanh(self.mod_gate.float()), nan=0.0)
+        if gate.abs().item() < 1e-6:
+            return lvsm_base_context
+
+        base = lvsm_base_context.float()
+        delta = torch.nan_to_num(patch_delta.float(), nan=0.0, posinf=0.0, neginf=0.0)
+        ctx = base + gate * delta
+        return ctx.to(lvsm_base_context.dtype)
 
     # ==================================================================
     # Phase-3: LVSM → LLM
@@ -149,146 +241,6 @@ class LVSMConnector(nn.Module):
         else:
             fused_embeds = video_embeds
         return fused_embeds
-
-    # ==================================================================
-    # Phase-5: LLM → LVSM  (per-view modulation)
-    # ==================================================================
-    @torch.amp.autocast('cuda', enabled=False)
-    def extract_per_view_feat(self, visual_hidden, video_grid_thw):
-        """
-        JJ : Extract one feature vector per raw frame from LLM visual hidden states.
-
-        Forced fp32 throughout to avoid bf16 LayerNorm / Linear instability.
-
-        Steps:
-          1. Group tokens by grid entry (respecting video_grid_thw)
-          2. Spatial mean-pool each merged frame  → [B, T_merged, d_qwen]
-          3. Expand temporal merge  → [B, N_raw, d_qwen]
-          4. Norm + project  → [B, N_raw, d_lvsm]
-
-        Args:
-            visual_hidden:  [L_vis, d_qwen]  or  [B, L_vis, d_qwen]
-            video_grid_thw: [num_grids, 3]   (t_merged, h_pre, w_pre)
-
-        Returns:
-            per_view_feat:  [B, N_raw, d_lvsm]  (fp32)
-        """
-        if visual_hidden.dim() == 2:
-            visual_hidden = visual_hidden.unsqueeze(0)  # [1, L_vis, d_qwen]
-
-        # JJ : Force fp32 for numerical stability in this small branch
-        x = visual_hidden.float()
-        B = x.shape[0]
-        sp = self.spatial_merge_size
-        tp = self.temporal_patch_size
-
-        # Step 1-2: Group by grid entry, spatial mean-pool per merged frame
-        per_merged_frame = []
-        tok = 0
-        for grid_idx in range(video_grid_thw.shape[0]):
-            t_m, h_p, w_p = (int(v) for v in video_grid_thw[grid_idx].tolist())
-            h_o, w_o = h_p // sp, w_p // sp
-            n_tok = t_m * h_o * w_o
-
-            chunk = x[:, tok:tok + n_tok]
-            chunk = chunk.reshape(B, t_m, h_o * w_o, self.d_qwen)
-            pooled = chunk.mean(dim=2)                            # [B, t_m, d_qwen]
-            per_merged_frame.append(pooled)
-            tok += n_tok
-
-        merged_feat = torch.cat(per_merged_frame, dim=1)         # [B, T_merged_total, d_qwen]
-
-        # Step 3: Expand temporal merge → [B, N_raw, d_qwen]
-        raw_feat = merged_feat.unsqueeze(2).expand(-1, -1, tp, -1)
-        raw_feat = raw_feat.reshape(B, -1, self.d_qwen)          # [B, N_raw, d_qwen]
-
-        # Step 4: Norm + project → [B, N_raw, d_lvsm]  (fp32, functional)
-        # JJ : Use F.layer_norm / F.linear with .float() on weights only,
-        #      so module parameters stay in their original dtype (no in-place cast).
-        _rf = raw_feat.detach()
-        # logger.warning(
-        #     f"[DIAG-PVF] raw_feat finite={torch.isfinite(_rf).all().item()} "
-        #     f"min={_rf.min().item():.4f} max={_rf.max().item():.4f} "
-        #     f"mean={_rf.mean().item():.4f} std={_rf.std().item():.4f}")
-
-        w_ln = self.view_norm.weight.float()
-        b_ln = self.view_norm.bias.float() if self.view_norm.bias is not None else None
-        normed = F.layer_norm(
-            raw_feat.float(),
-            normalized_shape=(self.d_qwen,),
-            weight=w_ln,
-            bias=b_ln,
-            eps=self.view_norm.eps,
-        )
-        _n = normed.detach()
-        # logger.warning(
-        #     f"[DIAG-PVF] after view_norm finite={torch.isfinite(_n).all().item()} "
-        #     f"min={_n.min().item():.4f} max={_n.max().item():.4f} "
-        #     f"view_norm.weight finite={torch.isfinite(self.view_norm.weight).all().item()} "
-        #     f"view_norm.weight range=[{self.view_norm.weight.min().item():.4f}, {self.view_norm.weight.max().item():.4f}]")
-
-        w_proj = self.view_proj.weight.float()
-        b_proj = self.view_proj.bias.float() if self.view_proj.bias is not None else None
-        per_view_feat = F.linear(normed, w_proj, b_proj)
-        _p = per_view_feat.detach()
-        _pf = torch.nan_to_num(_p)
-        # logger.warning(
-        #     f"[DIAG-PVF] after view_proj finite={torch.isfinite(_p).all().item()} "
-        #     f"min={_pf.min().item():.4f} max={_pf.max().item():.4f} "
-        #     f"view_proj.weight finite={torch.isfinite(self.view_proj.weight).all().item()} "
-        #     f"view_proj.weight norm={self.view_proj.weight.norm().item():.4f}")
-
-        return per_view_feat
-
-    def modulate_lvsm_context(self, lvsm_base_context, per_view_feat):
-        """
-        JJ : FiLM-style per-view modulation of lvsm_base_context.
-
-        ctx[b, n, p, :] = base[b, n, p, :] * (1 + gate * gamma[b, n, :])
-                                             +      gate * beta[b, n, :]
-
-        At init (gate=0): hard short-circuit → return base unchanged (true identity).
-        As gate grows:  LLM increasingly shapes per-view statistics.
-
-        Args:
-            lvsm_base_context: [B, N*P, d_lvsm]   pretrained LVSM input tokens (detached)
-            per_view_feat:     [B, N, d_lvsm]      from extract_per_view_feat()
-
-        Returns:
-            lvsm_context:      [B, N*P, d_lvsm]   modulated context for LVSM decoder
-        """
-        # JJ : Hard short-circuit when gate ≈ 0 — avoids 0 * NaN = NaN
-        gate = torch.nan_to_num(torch.tanh(self.mod_gate.float()), nan=0.0)
-        if gate.abs().item() < 1e-6:
-            return lvsm_base_context
-
-        B = lvsm_base_context.shape[0]
-        P = self.lvsm_n_patches
-        N = lvsm_base_context.shape[1] // P
-        d = self.d_lvsm
-
-        assert per_view_feat.shape == (B, N, d), (
-            f"[modulate] per_view_feat shape mismatch: "
-            f"got {per_view_feat.shape}, expected ({B}, {N}, {d})"
-        )
-
-        # JJ : Sanitize per_view_feat — NaN/Inf → 0 as last-resort guard
-        feat = torch.nan_to_num(per_view_feat.float(), nan=0.0, posinf=0.0, neginf=0.0)
-
-        # Reshape base: [B, N, P, d]
-        base = lvsm_base_context.float().view(B, N, P, d)
-
-        # FiLM parameters: [B, N, 1, d]  (broadcast over P patches)
-        # JJ : functional fp32 — no in-place module cast
-        gamma = F.linear(feat, self.gamma_head.weight.float(),
-                         self.gamma_head.bias.float()).unsqueeze(2)   # [B, N, 1, d]
-        beta = F.linear(feat, self.beta_head.weight.float(),
-                        self.beta_head.bias.float()).unsqueeze(2)     # [B, N, 1, d]
-
-        # Gated modulation (fp32)
-        ctx = base * (1.0 + gate * gamma) + gate * beta
-
-        return ctx.reshape(B, N * P, d).to(lvsm_base_context.dtype)
 
     # ==================================================================
     # Utility

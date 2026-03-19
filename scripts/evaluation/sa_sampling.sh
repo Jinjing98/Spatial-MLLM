@@ -19,6 +19,7 @@ MODELS_ROOT="/data/horse/ws/jixu233b-metadata_ws/models"
 # activate conda
 source /software/rapids/r24.10/Anaconda3/2024.02-1/etc/profile.d/conda.sh
 conda activate /data/horse/ws/jixu233b-3d_ws/envs/spatial-mllm
+module load release/24.04
 module load CUDA/12.4.0 # nvcc
 
 cd "$(dirname "$0")"

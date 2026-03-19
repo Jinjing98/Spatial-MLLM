@@ -32,21 +32,29 @@ class ModelArguments:
     lvsm_lpips_weight: float = field(default=0.0, metadata={"help": "LPIPS loss weight in NVS loss"})
     vgg_weight_file: str = field(default="./metric_checkpoint/imagenet-vgg-verydeep-19.mat", metadata={"help": "Path to VGG .mat weights for perceptual loss"})
     tune_mm_connector_lvsm: bool = field(default=True, metadata={"help": "Whether to train connector_lvsm (should always be True)"})
-    # JJ : LVSM decoder unfreeze
+
+    # JJ :  NVS related fine-tuning config (mostly for ablation/debugging purposes; can be left as default for normal training)
     tune_lvsm_decoder: bool = field(default=True, metadata={"help": "Unfreeze LVSM transformer_blocks + image_token_decoder (keep image_tokenizer frozen)"})
-    # JJ : wandb NVS image logging interval
     nvs_img_log_interval: int = field(default=50, metadata={"help": "Log rendered vs GT images to wandb every N steps (0=disable)"})
-    # JJ : NVS target pool — which frames to use as NVS supervision targets
     nvs_target_pool: str = field(default="nvs", metadata={"help": "NVS target pool: 'nvs' (novel only), 'input' (input frames only), 'all' (input + novel)"})
-    # JJ : Adapter type for LVSM ↔ QwenVL bridges
     lvsm2qwen_type: str = field(default="linear", metadata={"help": "Phase-3 adapter type (LVSM→QwenVL). Currently only 'linear'."})
     llm2lvsm_type: str = field(default="linear", metadata={"help": "Phase-5 adapter type (LLM→LVSM). Currently only 'linear'."})
+    vlm2context_adapt_strategy: str = field(
+        default="patch_residual",
+        metadata={"help": "Phase-5 context adaptation: 'film' (current) or 'patch_residual' (ctx=base+g*delta_patch)."},
+    )
+
     # JJ : SDPA output gating (arxiv 2505.06708) — element-wise sigmoid gate after attention output
     enable_sdpa_gating: bool = field(default=False, metadata={"help": "Add learned sigmoid gate after SDPA output in every decoder layer. Enhances cross-view reasoning."})
 
 @dataclass
 class DataArguments:
     dataset_use: str = field(default="")
+    # JJ: used for overfitting/debugging when set to a small number, or can be left as None for full dataset
+    max_train_samples: Optional[int] = field(
+        default=None,
+        metadata={"help": "If set, truncate the shuffled training set to the first N samples."},
+    )
     video_max_frames: Optional[int] = field(default=8)
     video_min_frames: Optional[int] = field(default=4)
     base_interval: int = field(default=2)
@@ -60,7 +68,11 @@ class DataArguments:
     video_frame_fps: Optional[int] = field(default=None)
     # JJ : NVS target frame loading (novel view synthesis)
     nvs_enabled: bool = field(default=False, metadata={"help": "Enable loading novel target frames for NVS loss"})
-    # JJ : Temporal-merge-aware real-neighbour sampling
+    # JJ : Enable loading precomputed pose(current is enforcenbr_after_step1_f16) package (.pt per video) instead of online pose/frame sampling.
+    use_pre_compute_pose: bool = field(default=False, metadata={"help": "Use precomputed pose/index package from disk"})
+    precompute_pose_source: str = field(default="vggt", metadata={"help": "Precomputed pose source. Supported: 'vggt'"})
+    precompute_pose_root: str = field(default="", metadata={"help": "Root dir containing precomputed pose .pt files"})
+    # JJ : Temporal-merge-aware real-neighbour sampling (not used if use_pre is true since precompute can already enforce this by design    )
     sampling_enforce_real_neighbour: bool = field(default=False, metadata={"help": "Sample N/2 anchors uniformly + N/2 real neighbours instead of N uniform frames"})
     neighbour_mode: str = field(default="random", metadata={"help": "Neighbour direction: 'before', 'after', or 'random'"})
     neighbour_max_step: int = field(default=1, metadata={"help": "Max frame offset for neighbour; actual step randomly sampled from [1, max_step]"})

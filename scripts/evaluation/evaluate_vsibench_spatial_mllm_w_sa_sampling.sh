@@ -2,8 +2,8 @@
 
 #SBATCH --nodes=1
 #SBATCH --ntasks=1 #2
-#SBATCH --gres=gpu:1           # use 1 GPU per node (i.e. use one GPU per task)
-#SBATCH --gpus-per-task=1
+#SBATCH --gres=gpu:4 #1           # use 1 GPU per node (i.e. use one GPU per task)
+#SBATCH --gpus-per-task=4 #1
 #SBATCH --time=15:00:00
 #SBATCH --mem=80G
 #SBATCH --partition=capella
@@ -18,6 +18,8 @@
 DATA_ROOT="/data/horse/ws/jixu233b-metadata_ws/datasets"
 MODELS_ROOT="/data/horse/ws/jixu233b-metadata_ws/models/Spatial-MLLM"
 RESULTS_SAVE_ROOT="/home/jixu233b/Projects/VLM_3D/SpatialMllmHallucinate/third_party/Spatial-MLLM"
+# JJ : HPC eval results base path
+EVAL_RESULTS_BASE="/data/horse/ws/jixu233b-metadata_ws/exps/stats/spatialmllm_results/results"
 
 # # tso
 # DATA_ROOT="/mnt/nct-zfs/TCO-All/SharedDatasets"
@@ -26,10 +28,15 @@ RESULTS_SAVE_ROOT="/home/jixu233b/Projects/VLM_3D/SpatialMllmHallucinate/third_p
 
 # activate conda
 source /software/rapids/r24.10/Anaconda3/2024.02-1/etc/profile.d/conda.sh
-# conda activate /data/horse/ws/jixu233b-3d_ws/envs/spatial-mllm
-conda activate /data/horse/ws/jixu233b-3d_ws/envs/transformers_v5
+conda activate /data/horse/ws/jixu233b-3d_ws/envs/spatial-mllm
+# conda activate /data/horse/ws/jixu233b-3d_ws/envs/transformers_v5
+module load release/24.04
 module load CUDA/12.4.0 # nvcc
 
+# # JJ: Always run from repo root to keep relative paths deterministic across bash/sbatch.
+# SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# REPO_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
+# cd "$REPO_ROOT"
 cd "$(dirname "$0")"
 cd ../..
 cd "$SLURM_SUBMIT_DIR"
@@ -42,7 +49,7 @@ mkdir -p $TRITON_CACHE_DIR
 pwd
 
 # Use absolute path for output to avoid permission issues
-OUTPUT_ROOT="${RESULTS_SAVE_ROOT}/results/vsibench-sa-sampling"
+OUTPUT_ROOT="${EVAL_RESULTS_BASE}/vsibench-sa-sampling"
 mkdir -p "$OUTPUT_ROOT"
 
 # OUTPUT_ROOT="results/vsibench"
@@ -68,6 +75,8 @@ QUESTION_TYPE_LIST=(
     "route_planning" # missing in previous all
 )
 # //////////SFT MODEL//////////////////
+SFT_MODELS_ROOT="/data/horse/ws/jixu233b-metadata_ws/exps/train/spatialmllm"
+
 MODEL_TYPE="custom-spatial-mllm"
 MODEL_PATH="${SFT_MODELS_ROOT}/20260216_183216_spatial-mllm-sft_2x8"
 MODEL_NAME_SUFFIX="-sqa3d40k-sft"
@@ -82,21 +91,22 @@ MODEL_NAME_SUFFIX="-baseline-skipCnc-sp133krp2k"
 MODEL_PATH="${SFT_MODELS_ROOT}/20260301_135514_spatial-mllm-sft_baseline_sp133krp2k"
 MODEL_NAME_SUFFIX="-baseline-sp133krp2k"
 
-<<<<<<< HEAD
-MODEL_PATH="${MODELS_ROOT}/checkpoints/Spatial-MLLM-v1.1-Instruct-135K"
-# MODEL_NAME=$(echo "$MODEL_PATH" | cut -d'/' -f2)
-# MODEL_NAME=$(echo "$MODEL_PATH" | cut -d'/' -f9)
-MODEL_TYPE="spatial-mllm"
-MODEL_NAME_SUFFIX=""
-
-MODEL_TYPE="custom-spatial-mllm"
-MODEL_NAME_SUFFIX="adaptedPosID_RoPE"
-=======
 # MODEL_TYPE="custom-spatial-mllm"
 # MODEL_PATH="${SFT_MODELS_ROOT}/20260225_121046_spatial-mllm-sft_skipCnc_vicabase50_hpc"
 # MODEL_NAME_SUFFIX="-skipCnc-baseline-vicabase50"
 
 
+MODEL_TYPE="custom-spatial-mllm-lvsm"
+MODEL_PATH="${SFT_MODELS_ROOT}/20260311_190520_spatial-mllm-sft_4x4_hpc_naiveqwen25_enforceRealNbr"
+MODEL_NAME_SUFFIX="-naiveqwen25-enforcNbr-sp133krp2k%20"
+
+# MODEL_TYPE="spatial-mllm"
+# MODEL_PATH="${SFT_MODELS_ROOT}/20260311_192058_spatial-mllm-sft_4x4_hpc_spmllm_enforceRealNbr"
+# MODEL_NAME_SUFFIX="-spmllm-enforcNbr-sp133krp2k%20"
+
+MODEL_TYPE="custom-spatial-mllm-lvsm"
+MODEL_PATH="${SFT_MODELS_ROOT}/20260312_051522_spatial-mllm-sft_4x4_hpc_LVSMnvs01_12view_AllTar_sftGatedSdpa_enforceRealNbr"
+MODEL_NAME_SUFFIX="-LVSMnvs01-enforcNbr-sp133krp2k%20"
 
 
 #PTHW+skip_connector
@@ -123,6 +133,17 @@ MODEL_NAME_SUFFIX="adaptedPosID_RoPE"
 
 # ////////////////////////////
 
+# MODEL_NAME_SUFFIX="adapted_PRoPE"
+# MODEL_NAME_SUFFIX="woT"
+# MODEL_NAME_SUFFIX="pRoPE"
+# MODEL_NAME_SUFFIX="adapted"
+# MODEL_NAME_SUFFIX="PTHWrope_1stOrderPose_882424"
+# MODEL_NAME_SUFFIX="PHWrope_1stOrderPose_162424"
+# MODEL_NAME_SUFFIX="PTHWrope_1stOrderPose_882424"
+# MODEL_NAME_SUFFIX="PHWrope_medoidOrderPose_162424"
+# MODEL_NAME_SUFFIX="PTHWrope_medoidOrderPose_882424"
+# MODEL_NAME_SUFFIX="-skipCnc"
+
 # MODEL_TYPE="qwen2.5-vl"
 # MODEL_PATH="Qwen/Qwen2.5-VL-3B-Instruct"
 # MODEL_NAME_SUFFIX=""
@@ -135,22 +156,10 @@ MODEL_NAME_SUFFIX="adaptedPosID_RoPE"
 # MODEL_PATH="Qwen/Qwen3-VL-2B-Instruct"
 # MODEL_NAME_SUFFIX="PHWrope_1stOrderPose_242020"
 
-MODEL_TYPE="custom-spatial-mllm"
-MODEL_PATH="Diankun/Spatial-MLLM-v1.1-Instruct-135K"
-# MODEL_NAME_SUFFIX="adapted_PRoPE"
-# MODEL_NAME_SUFFIX="woT"
-# MODEL_NAME_SUFFIX="pRoPE"
-# MODEL_NAME_SUFFIX="adapted"
-# MODEL_NAME_SUFFIX="PTHWrope_1stOrderPose_882424"
-# MODEL_NAME_SUFFIX="PHWrope_1stOrderPose_162424"
-# MODEL_NAME_SUFFIX="PTHWrope_1stOrderPose_882424"
-# MODEL_NAME_SUFFIX="PHWrope_medoidOrderPose_162424"
-# MODEL_NAME_SUFFIX="PTHWrope_medoidOrderPose_882424"
-MODEL_NAME_SUFFIX="-skipCnc"
->>>>>>> b1c97b0 (latest eval bash status from hpc)
-
-MODEL_PATH="${MODELS_ROOT}/checkpoints/Spatial-MLLM-v1.1-Instruct-135K"
-MODEL_TYPE="spatial-mllm"
+# MODEL_TYPE="custom-spatial-mllm"
+# MODEL_PATH="Diankun/Spatial-MLLM-v1.1-Instruct-135K"
+# MODEL_PATH="${MODELS_ROOT}/checkpoints/Spatial-MLLM-v1.1-Instruct-135K"
+# MODEL_TYPE="spatial-mllm"
 # MODEL_TYPE="custom-spatial-mllm"
 # MODEL_TYPE="qwen2.5-vl"
 # MODEL_PATH='Qwen/Qwen2.5-VL-3B-Instruct'
@@ -161,8 +170,8 @@ MODEL_TYPE="spatial-mllm"
 # JJ: Fixed default values (not overridable by env vars)
 # MODEL_TYPE="qwen2.5-vl"
 # MODEL_PATH="Qwen/Qwen2.5-VL-3B-Instruct"
-MODEL_TYPE="qwen3-vl"
-MODEL_PATH="Qwen/Qwen3-VL-2B-Instruct"
+# MODEL_TYPE="qwen3-vl"
+# MODEL_PATH="Qwen/Qwen3-VL-2B-Instruct"
 # MODEL_TYPE="spatial-mllm"
 # MODEL_TYPE="custom-spatial-mllm"
 # MODEL_PATH="Diankun/Spatial-MLLM-v1.1-Instruct-135K"
@@ -170,15 +179,10 @@ MODEL_PATH="Qwen/Qwen3-VL-2B-Instruct"
 MODEL_NAME="${MODEL_TYPE}${MODEL_NAME_SUFFIX}"
 
 # nframes=(None)
-<<<<<<< HEAD
-# nframes=(32)
-nframes=(16)
-=======
 # nframes=(64)
 # nframes=(32)
 nframes=(16)
 # nframes=(16 32)
->>>>>>> b1c97b0 (latest eval bash status from hpc)
 # nframes=(8)
 
 # sample_fps=(None)
@@ -202,13 +206,10 @@ SCENE_NAME_LIST=()  # By default, empty array means all scenes will be evaluated
 
 for nframe in "${nframes[@]}"; do
     TIMESTAMP=$(date +"%Y%m%d_%H%M%S")
-<<<<<<< HEAD
-    
-=======
 
     # JJ
-    SAMPLING='sa_sampling'
-    MERGEAWARE_DETAILS=''
+    # SAMPLING='sa_sampling'
+    # MERGEAWARE_DETAILS=''
     # SAMPLING='enforce_repeat_fps_stdnorm_medoid_sampling'
     # MERGEAWARE_DETAILS=''
     # SAMPLING='enforce_repeat_sa_sampling'
@@ -225,17 +226,16 @@ for nframe in "${nframes[@]}"; do
     # MERGEAWARE_DETAILS=''
     # SAMPLING='mergeaware_uniform_sampling'
     # MERGEAWARE_DETAILS='_rnd_fidss30'
-    # SAMPLING='mergeaware_sa_sampling'
-    # MERGEAWARE_DETAILS='_rnd_idxss1'
+    SAMPLING='mergeaware_sa_sampling'
+    MERGEAWARE_DETAILS='_rnd_idxss1'
     # SAMPLING='mergeaware_fps_stdnorm_medoid_sampling'
     # MERGEAWARE_DETAILS=''
 
 
-    OUTPUT_ROOT="${RESULTS_SAVE_ROOT}/results/vsibench_${SAMPLING}"
+    OUTPUT_ROOT="${EVAL_RESULTS_BASE}/vsibench_${SAMPLING}"
     mkdir -p "$OUTPUT_ROOT"
     VIDEO_DIR="${DATA_ROOT}/vsibench/${SAMPLING}_${nframe}f${MERGEAWARE_DETAILS}" 
 
->>>>>>> b1c97b0 (latest eval bash status from hpc)
     # Build dataset suffix
     DATASET_SUFFIX=""
     if [ ${#DATASETS[@]} -ne ${#DATASET_LIST[@]} ]; then
@@ -285,9 +285,6 @@ for nframe in "${nframes[@]}"; do
         --output_name "eval_result" \
         $EXTRA_ARGS \
         2>&1 | tee -a "$LOG_FILE"
-<<<<<<< HEAD
-        
-=======
         # --skip_eval --input_dir "$EXISTING_INPUT_DIR" \
 
         # --use_pose_rope \
@@ -309,6 +306,5 @@ for nframe in "${nframes[@]}"; do
         # --pose_enc_type "PTHW" \
         # --mrope_section 8 8 24 24 \
 
->>>>>>> b1c97b0 (latest eval bash status from hpc)
     echo ">>> Experiment Finished. Results in $EXP_DIR"
 done

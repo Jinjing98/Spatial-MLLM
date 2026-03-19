@@ -49,6 +49,7 @@ export DATASET_ROOT
 # JJ Freq Edit
 OUTPUT_ROOT="/data/horse/ws/jixu233b-metadata_ws/exps/train/spatialmllm"
 TRAIN_EPOCHS=1 # default 1 
+SAVE_STEPS=0.0625 # fraction of total steps between checkpoints (e.g. 0.125 -> ~8 saves)
 NUM_WORKERS=2 # default 8, set to 0 to avoid multiprocessing overhead
 NPROC_PER_NODE=2 # default 6 
 GRAD_ACCUM_STEPS=8 # JJ: reduced from 8 to match 4-sample debug dataset (4 samples / 2 GPUs = 2 per GPU)
@@ -162,7 +163,7 @@ args="
     --video_frame_fps ${VIDEO_FRAME_FPS} \
     --eval_strategy "no" \
     --save_strategy "steps" \
-    --save_steps 0.0625 \
+    --save_steps ${SAVE_STEPS} \
     --learning_rate ${lr} \
     --mm_projector_lr ${mm_projector_lr} \
     --weight_decay ${weight_decay} \

@@ -145,7 +145,7 @@ def prepare_chat_batch(
             padding=True,
             padding_side="left",
         )
-    else:
+    elif model_type in ["spatial-mllm", "custom-spatial-mllm", "custom-spatial-mllm-lvsm","qwen2.5-vl"]:
         video_inputs = []
         image_inputs = []
         for example in batch_messages:
@@ -165,11 +165,13 @@ def prepare_chat_batch(
             padding=True,
             padding_side="left",
         )
+    else:
+        raise ValueError(f"Unknown model type: {model_type}")
 
     if "spatial-mllm" == model_type:
         batch = prepare_spatial_mllm_inputs(batch, video_inputs, image_inputs)
-    elif "custom-spatial-mllm" == model_type:
-        # JJ
+    elif model_type in ["custom-spatial-mllm", "custom-spatial-mllm-lvsm"]:
+        # JJ : custom-spatial-mllm-lvsm shares the same batch prep as custom-spatial-mllm
         batch = prepare_spatial_mllm_inputs_with_framesid(batch, video_inputs, image_inputs, batch_selected_frames)
     elif "spatial-mllm-qwen3" == model_type:
         # JJ : spatial-mllm-qwen3 needs tchw for pose computation
@@ -480,6 +482,10 @@ def evaluate_vsibench(vsi_data, model_type, model_path, batch_size, video_dir, o
         print(f"[Evaluation] 📊 Final mrope_section: {actual_mrope_section}")
     elif model_type == "spatial-mllm-qwen3" and not use_pose_rope:
         print(f"[Evaluation] ℹ️  Using Qwen3 standard 3D mRoPE (T+H+W)")
+    
+    # JJ : custom-spatial-mllm-lvsm — Pose RoPE not yet supported
+    elif model_type == "custom-spatial-mllm-lvsm" and use_pose_rope:
+        raise NotImplementedError("Pose RoPE is not yet implemented for custom-spatial-mllm-lvsm.")
     
     final_output = []
 

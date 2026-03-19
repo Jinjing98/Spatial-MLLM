@@ -1,3 +1,26 @@
+17.03
+3076535 lvsm_patchwise_nogating_nbr1f16_precompute_data20
+3076603 eval qwen3vl with profile
+3076604 eval qwen25vl with profile
+
+train full dataset
+3076680 _4x4_hpc_naiveqwen25_enforceRealNbrAfter1step_precomputePose
+
+16.03
+3076439: precompute precompute_pose_vggt_16_pa: SAMPLING_ENFORCE_REAL_NEIGHBOUR 16 NEIGHBOUR_MODE after NEIGHBOUR_MAX_STEP 1
+3076490 evaçl qwen3 uniform+wo helper identiy
+3076491 evaçl qwen25 uniform+wo helper identiy
+3076492 eval qwen25 uniform
+
+
+
+11.03
+
+#3051316 _4x4_hpc_spmllm_enforceRealNbr
+#3051279 _4x4_hpc_LVSMnvs01_16view_AllTar_sftGatedSdpa_enforceRealNbr
+#3051281 _4x4_hpc_naiveqwen25_enforceRealNbr
+
+
 
 
 

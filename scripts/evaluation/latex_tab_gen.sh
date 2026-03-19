@@ -67,6 +67,13 @@ SAMPLING_QUERY_NAME='' #_enforce_repeat_sa_sampling _fps_sampling _efficient_sam
 METRICS_FILE_FORMAT="metrics_${MODEL_QUERY_NAME}.json"
 # METRICS_FILE_FORMAT="metrics_${MODEL_QUERY_NAME_AVG_ONLY}.json"
 
+
+MODEL_QUERY_NAME="sp133krp2k*" 
+MODEL_QUERY_NAME_AVG_ONLY="custom-spatial-mllm-lvsm"
+SAMPLING_QUERY_NAME='_mergeaware_sa_sampling' #_efficient_sampling _sa_sampling _efficient_sampling_grid
+METRICS_FILE_FORMAT="metrics_${MODEL_QUERY_NAME}.json"
+METRICS_FILE_FORMAT="metrics_${MODEL_QUERY_NAME_AVG_ONLY}.json"
+
 # MODEL_QUERY_NAME="spatial-mllm*" 
 # MODEL_QUERY_NAME_AVG_ONLY="spatial-mllm"
 # SAMPLING_QUERY_NAME='_sa_sampling' #_efficient_sampling _sa_sampling _efficient_sampling_grid

@@ -21,6 +21,7 @@ Only supports Qwen2.5-VL-3B. Other model sizes raise NotImplementedError.
 import logging
 import os
 import random
+import time
 from typing import List, Optional, Tuple, Union
 
 import torch
@@ -105,11 +106,11 @@ class CustomSpatialMLLMLVSMForConditionalGeneration(CustomSpatialMLLMForConditio
         # JJ : Adapter types for LVSM ↔ QwenVL bridges
         self.lvsm2qwen_type = lvsm_cfg.get('lvsm2qwen_type', 'linear')
         self.llm2lvsm_type = lvsm_cfg.get('llm2lvsm_type', 'linear')
-        self.vlm2context_adapt_strategy = lvsm_cfg.get('vlm2context_adapt_strategy', 'patch_residual')
-        if self.vlm2context_adapt_strategy != 'patch_residual':
+        self.vlm2context_adapt_strategy = lvsm_cfg.get('vlm2context_adapt_strategy', 'film')
+        if self.vlm2context_adapt_strategy not in ('film', 'patch_residual'):
             raise NotImplementedError(
                 f"vlm2context_adapt_strategy='{self.vlm2context_adapt_strategy}' not supported. "
-                "Only 'patch_residual' is supported."
+                "Choose from: 'film', 'patch_residual'."
             )
         
         # --- LVSM decoder-only model (structure only, NO checkpoint loading) ---
@@ -186,35 +187,13 @@ class CustomSpatialMLLMLVSMForConditionalGeneration(CustomSpatialMLLMForConditio
         # jj: Cache minimal adapter diagnostics for wandb logging (updated in forward/decode).
         self._diag_lvsm2llm_delta_ratio = None
         self._diag_llm2lvsm_delta_ratio = None
-
-        # debug
-        #///used when inject vggt geo feat
-        self.disable_lvsm2llm_fusion = True
-        self.disable_llm2lvsm_fusion = True
-        self.nvs_loss_only = True
-
-        # JJ: mirror connector geometry attrs for decoder_input_vggt_geo path
-        self.spatial_embeds_layer_idx = -1
-        self.visual_temporal_merge_size = 2
-        self.visual_spatial_merge_size = 2
-
-        self.decoder_input_llm_layer = False
-        self.random_reset_decoder_input_token =False
-        self.decoder_input_vggt_geo = True
-        if self.decoder_input_vggt_geo:
-            # JJ: Bridge VGGT geometric packed tokens -> Qwen width so existing llm2lvsm projector can be reused.
-            # Use for debugging how far the clip is from mvg vit.
-            self.vggt_geo_in_dim = (
-                config.hidden_size * self.visual_temporal_merge_size * (self.visual_spatial_merge_size ** 2)
-            )
-            # We use ln rather qwenrmsenorm, as we feed to lvsm direcly wo going through llm.
-            self.vggt_geo_norm = nn.LayerNorm(self.vggt_geo_in_dim)
-            self.vggt_geo_proj = nn.Linear(self.vggt_geo_in_dim, config.hidden_size)
-
-
-        self.decoder_input_which_llm_layer = 0 # self.model.config.num_hidden_layers + 1 36+1
-        # self.decoder_input_which_llm_layer = int((self.model.config.num_hidden_layers)//2) # self.model.config.num_hidden_layers + 1 36+1
-        # self.decoder_input_which_llm_layer = -1 # self.model.config.num_hidden_layers + 1 36+1
+        # jj: Optional per-stage timing diagnostics (off by default, enabled via env vars).
+        self._stage_time_enabled = os.environ.get("SPMLLM_LVSM_STAGE_TIME", "0").lower() in {
+            "1", "true", "yes", "on"
+        }
+        self._stage_time_interval = max(1, int(os.environ.get("SPMLLM_LVSM_STAGE_TIME_INTERVAL", "1")))
+        self._stage_time_step = 0
+        self._stage_time_totals = {}
     # ================================================================
     # JJ : Load LVSM pretrained weights (must be called AFTER from_pretrained)
     # ================================================================
@@ -253,8 +232,6 @@ class CustomSpatialMLLMLVSMForConditionalGeneration(CustomSpatialMLLMForConditio
         _init_linear_xavier(conn.view_proj)
         _init_linear_xavier(conn.gamma_head)
         _init_linear_xavier(conn.beta_head)
-        _init_layernorm(getattr(self, "vggt_geo_norm", None))
-        _init_linear_xavier(getattr(self, "vggt_geo_proj", None))
 
         # Gates — small non-zero init so gradient flows from step 0
         with torch.no_grad():
@@ -354,6 +331,54 @@ class CustomSpatialMLLMLVSMForConditionalGeneration(CustomSpatialMLLMForConditio
         b = base.detach().float()
         return (torch.norm(u - b) / torch.norm(b).clamp_min(eps)).item()
 
+    def _stage_now(self, device=None):
+        if self._stage_time_enabled and device is not None and torch.cuda.is_available() and device.type == "cuda":
+            torch.cuda.synchronize(device)
+        return time.perf_counter()
+
+    def _stage_add(self, stats, key, t0, t1):
+        if self._stage_time_enabled:
+            stats[key] = stats.get(key, 0.0) + (t1 - t0)
+
+    def _stage_log(self, stats):
+        if not self._stage_time_enabled:
+            return
+        self._stage_time_step += 1
+        for key, val in stats.items():
+            self._stage_time_totals[key] = self._stage_time_totals.get(key, 0.0) + val
+        if self._stage_time_step % self._stage_time_interval != 0:
+            return
+
+        ordered = [
+            "visual_encoder",
+            "spatial_encoder",
+            "prepare_lvsm_inputs",
+            "fuse_for_llm",
+            "llm_forward",
+            "ce_loss",
+            "nvs_context_adapt",
+            "nvs_target_prepare",
+            "nvs_decode",
+            "nvs_loss",
+            "nvs_total",
+            "forward_total",
+        ]
+        step_total = stats.get("forward_total", 0.0)
+        step_msg = []
+        avg_msg = []
+        for k in ordered:
+            if k in stats:
+                ms = stats[k] * 1000.0
+                if step_total > 0 and k != "forward_total":
+                    step_msg.append(f"{k}={ms:.1f}ms ({100.0 * stats[k] / step_total:.1f}%)")
+                else:
+                    step_msg.append(f"{k}={ms:.1f}ms")
+            if k in self._stage_time_totals:
+                avg_ms = self._stage_time_totals[k] * 1000.0 / self._stage_time_step
+                avg_msg.append(f"{k}={avg_ms:.1f}ms")
+        logger.warning(f"[LVSM-STAGE-TIME][step={self._stage_time_step}] " + ", ".join(step_msg))
+        logger.warning(f"[LVSM-STAGE-TIME-AVG][step={self._stage_time_step}] " + ", ".join(avg_msg))
+
     # ================================================================
     # JJ : Image pre-processing helper — direct resize to lvsm_image_size
     # ================================================================
@@ -429,20 +454,56 @@ class CustomSpatialMLLMLVSMForConditionalGeneration(CustomSpatialMLLMForConditio
         c2w = w2c_to_c2w(extrinsics_w2c)  # [B, S, 4, 4]
 
         # # JJ [DIAG] : Trace NaN source step-by-step
+        # logger.warning(
+        #     f"[DIAG-PrepLVSM] extrinsics_w2c finite={torch.isfinite(extrinsics_w2c).all().item()} "
+        #     f"range=[{extrinsics_w2c.min().item():.3f}, {extrinsics_w2c.max().item():.3f}]"
+        # )
+        # logger.warning(
+        #     f"[DIAG-PrepLVSM] c2w finite={torch.isfinite(c2w).all().item()} "
+        #     f"range=[{c2w.min().item():.3f}, {c2w.max().item():.3f}]"
+        # )
+        # logger.warning(
+        #     f"[DIAG-PrepLVSM] fxfycxcy finite={torch.isfinite(fxfycxcy).all().item()} "
+        #     f"range=[{fxfycxcy.min().item():.3f}, {fxfycxcy.max().item():.3f}]"
+        # )
+        # JJ [DIAG] : Print per-view fxfycxcy to verify crop adaptation
+        _fxfy = fxfycxcy.detach().float()  # [B, N, 4]
+        # for _vi in range(_fxfy.shape[1]):
+            # _fx, _fy, _cx, _cy = _fxfy[0, _vi].tolist()
+            # logger.warning(
+            #     f"[DIAG-PrepLVSM] view[{_vi}] fx={_fx:.2f} fy={_fy:.2f} cx={_cx:.2f} cy={_cy:.2f}"
+            # )
+
         # Compute Plücker rays
         ray_o, ray_d = compute_plucker_rays(c2w, fxfycxcy, h=lvsm_size, w=lvsm_size, device=device)
 
+        # logger.warning(
+        #     f"[DIAG-PrepLVSM] ray_o finite={torch.isfinite(ray_o).all().item()} "
+        #     f"range=[{ray_o.min().item():.3f}, {ray_o.max().item():.3f}]"
+        # )
+        # logger.warning(
+        #     f"[DIAG-PrepLVSM] ray_d finite={torch.isfinite(ray_d).all().item()} "
+        #     f"range=[{ray_d.min().item():.3f}, {ray_d.max().item():.3f}]"
+        # )
 
         # Get posed input (RGB + Plücker): [B, N, 9, lvsm_size, lvsm_size]
         posed_input = get_posed_input(
             images=lvsm_images.to(dtype), ray_o=ray_o.to(dtype), ray_d=ray_d.to(dtype)
         )
 
+        # logger.warning(
+        #     f"[DIAG-PrepLVSM] posed_input finite={torch.isfinite(posed_input).all().item()} "
+        #     f"range=[{posed_input.min().item():.3f}, {posed_input.max().item():.3f}]"
+        # )
 
         # Tokenize via frozen LVSM image_tokenizer
         with torch.no_grad():
             lvsm_input_tokens = self.lvsm_model.image_tokenizer(posed_input)
 
+        # logger.warning(
+        #     f"[DIAG-PrepLVSM] lvsm_input_tokens finite={torch.isfinite(lvsm_input_tokens).all().item()} "
+        #     f"range=[{lvsm_input_tokens.min().item():.3f}, {lvsm_input_tokens.max().item():.3f}]"
+        # )
 
         _, n_patches, d = lvsm_input_tokens.shape
         B = c2w.shape[0]
@@ -494,17 +555,48 @@ class CustomSpatialMLLMLVSMForConditionalGeneration(CustomSpatialMLLMForConditio
             orig_hw=(H_orig, W_orig)
         )  # [B, S, 4]
 
+        # JJ [DIAG] : Trace NaN source step-by-step
+        logger.warning(
+            f"[DIAG-PrepLVSM] extrinsics_w2c finite={torch.isfinite(extrinsics_w2c).all().item()} "
+            f"range=[{extrinsics_w2c.min().item():.3f}, {extrinsics_w2c.max().item():.3f}]"
+        )
+        logger.warning(
+            f"[DIAG-PrepLVSM] c2w finite={torch.isfinite(c2w).all().item()} "
+            f"range=[{c2w.min().item():.3f}, {c2w.max().item():.3f}]"
+        )
+        logger.warning(
+            f"[DIAG-PrepLVSM] fxfycxcy finite={torch.isfinite(fxfycxcy).all().item()} "
+            f"range=[{fxfycxcy.min().item():.3f}, {fxfycxcy.max().item():.3f}]"
+        )
+        
         # Compute Plücker rays
         ray_o, ray_d = compute_plucker_rays(c2w, fxfycxcy, h=lvsm_size, w=lvsm_size, device=device)
+
+        logger.warning(
+            f"[DIAG-PrepLVSM] ray_o finite={torch.isfinite(ray_o).all().item()} "
+            f"range=[{ray_o.min().item():.3f}, {ray_o.max().item():.3f}]"
+        )
+        logger.warning(
+            f"[DIAG-PrepLVSM] ray_d finite={torch.isfinite(ray_d).all().item()} "
+            f"range=[{ray_d.min().item():.3f}, {ray_d.max().item():.3f}]"
+        )
         
         # Get posed input (RGB + Plücker): [B, N, 9, 256, 256]
         posed_input = get_posed_input(images=lvsm_images.to(dtype), ray_o=ray_o.to(dtype), ray_d=ray_d.to(dtype))
 
+        logger.warning(
+            f"[DIAG-PrepLVSM] posed_input finite={torch.isfinite(posed_input).all().item()} "
+            f"range=[{posed_input.min().item():.3f}, {posed_input.max().item():.3f}]"
+        )
         
         # Tokenize via frozen LVSM image_tokenizer: [B*N, n_patches, d_lvsm]
         with torch.no_grad():
             lvsm_input_tokens = self.lvsm_model.image_tokenizer(posed_input)
 
+        # logger.warning(
+        #     f"[DIAG-PrepLVSM] lvsm_input_tokens finite={torch.isfinite(lvsm_input_tokens).all().item()} "
+        #     f"range=[{lvsm_input_tokens.min().item():.3f}, {lvsm_input_tokens.max().item():.3f}]"
+        # )
 
         _, n_patches, d = lvsm_input_tokens.shape
         B = c2w.shape[0]
@@ -592,9 +684,13 @@ class CustomSpatialMLLMLVSMForConditionalGeneration(CustomSpatialMLLMForConditio
 
         Pipeline:
           base_context    = image_tokenizer(input_frames)              [pretrained, detached]
-          llm_delta       = project_visual_tokens_to_lvsm(visual_hidden)
-          patch_delta     = upsample_to_lvsm_grid(llm_delta)
-          lvsm_context    = base_context + gate * patch_delta
+          strategy='film':
+            per_view_feat = extract_per_view_feat(visual_hidden)       [learnable, ∇ → LLM]
+            lvsm_context  = modulate(base_context, per_view_feat)      [FiLM: gamma/beta per view]
+          strategy='patch_residual':
+            llm_delta     = project_visual_tokens_to_lvsm(visual_hidden)
+            patch_delta   = upsample_to_lvsm_grid(llm_delta)
+            lvsm_context  = base_context + gate * patch_delta
           rendered        = LVSM_transformer(lvsm_context, target_poses) → loss vs GT
 
         At small gate init: ctx is near base (stable warm start).
@@ -616,6 +712,7 @@ class CustomSpatialMLLMLVSMForConditionalGeneration(CustomSpatialMLLMForConditio
         dtype = visual_hidden.dtype  # bf16 from autocast — kept throughout for xformers
         lvsm_size = self.lvsm_image_size
         N_tgt = nvs_target_frames.shape[0]
+        stage_stats = {}
 
         # JJ : Subsample if more targets than num_target_views
         num_targets = min(self.num_target_views, N_tgt)
@@ -627,40 +724,70 @@ class CustomSpatialMLLMLVSMForConditionalGeneration(CustomSpatialMLLMForConditio
             N_tgt = num_targets
         # JJ : nvs_target_pool ('input'/'nvs'/'all') is handled at the call site in forward()
 
-        # ---- Patch-residual modulation ----
+        # ---- Per-view FiLM modulation (replaces old patch-level residual) ----
 
-        base_context = lvsm_base_context.detach().to(dtype)
-        # Step 1: project each visual token to LVSM channels (no pooling)
-        # TODO: Main ablation candidate for a stronger patch branch:
-        # compare current `projection -> bilinear upsample` against
-        # `LayerNorm -> bilinear upsample -> projection`.
-        llm_delta = self.connector_lvsm.project_visual_tokens_to_lvsm(visual_hidden)  # [B, L_vis, d_lvsm]
-        # Step 2: recover patch-wise structure aligned to lvsm_base_context
-        patch_delta = self._upsample_llm_delta_to_lvsm(llm_delta, video_grid_thw)  # [B, N*P, d_lvsm]
+        # JJ [DIAG]: Trace NaN source — visual_hidden from LLM
+        # vh_finite = torch.isfinite(visual_hidden).all().item()
+        # vh_f32 = torch.nan_to_num(visual_hidden.detach().float())
+        # logger.warning(
+        #     f"[DIAG-NVS] visual_hidden finite={vh_finite} "
+        #     f"min={vh_f32.min().item():.4f} max={vh_f32.max().item():.4f} "
+        #     f"mean={vh_f32.mean().item():.4f} std={vh_f32.std().item():.4f}"
+        # )
 
-        if self.random_reset_decoder_input_token:
-            # JJ : For a stronger patch_residual ablation, randomly re-initialize the patch_delta tokens at each forward pass.
-            # This tests whether the patch_residual branch provides useful learning signal even without a stable, informative LLM delta input.
-            patch_delta = torch.randn_like(patch_delta)
+        if self.vlm2context_adapt_strategy == 'film':
+            t0 = self._stage_now(device)
+            base_context = lvsm_base_context.detach().to(dtype)
+            # Step 1: Extract one feature vector per raw frame from LLM hidden states
+            per_view_feat = self.connector_lvsm.extract_per_view_feat(
+                visual_hidden, video_grid_thw
+            )  # [B, N_raw, d_lvsm]
 
-        if self.disable_llm2lvsm_fusion:
-            # If fusion is disabled, skip adding the delta to the context.
-            # This allows us to isolate the effect of the LLM-to-LVSM modulation during ablation.
-            lvsm_context = patch_delta
-        else:
+            # JJ [DIAG]: Trace NaN source — per_view_feat after extraction
+            pvf_finite = torch.isfinite(per_view_feat).all().item()
+            pvf_f32 = torch.nan_to_num(per_view_feat.detach().float())
+            # logger.warning(
+            #     f"[DIAG-NVS] per_view_feat finite={pvf_finite} "
+            #     f"min={pvf_f32.min().item():.4f} max={pvf_f32.max().item():.4f} "
+            #     f"mean={pvf_f32.mean().item():.4f} std={pvf_f32.std().item():.4f} "
+            #     f"mod_gate={self.connector_lvsm.mod_gate.item():.6f}"
+            # )
+
+            # Step 2: FiLM-modulate lvsm_base_context per view
+            lvsm_context = self.connector_lvsm.modulate_lvsm_context(
+                base_context, per_view_feat
+            )  # [B, N*P, d_lvsm]
+            self._stage_add(stage_stats, "nvs_context_adapt", t0, self._stage_now(device))
+        elif self.vlm2context_adapt_strategy == 'patch_residual':
+            t0 = self._stage_now(device)
+            base_context = lvsm_base_context.detach().to(dtype)
+            # Step 1: project each visual token to LVSM channels (no pooling)
+            # TODO: Main ablation candidate for a stronger patch branch:
+            # compare current `projection -> bilinear upsample` against
+            # `LayerNorm -> bilinear upsample -> projection`.
+            llm_delta = self.connector_lvsm.project_visual_tokens_to_lvsm(visual_hidden)  # [B, L_vis, d_lvsm]
+            # Step 2: recover patch-wise structure aligned to lvsm_base_context
+            patch_delta = self._upsample_llm_delta_to_lvsm(llm_delta, video_grid_thw)  # [B, N*P, d_lvsm]
             # Step 3: gated residual fusion on context
             lvsm_context = self.connector_lvsm.fuse_patch_residual_context(
                 base_context, patch_delta.to(dtype)
             )  # [B, N*P, d_lvsm]
+            self._stage_add(stage_stats, "nvs_context_adapt", t0, self._stage_now(device))
+        else:
+            raise NotImplementedError(
+                f"Unsupported vlm2context_adapt_strategy: {self.vlm2context_adapt_strategy}"
+            )
         # jj: Track actual LLM->LVSM modulation magnitude (not gate proxy) for diagnosis.
         self._diag_llm2lvsm_delta_ratio = self._safe_delta_ratio(lvsm_context, base_context)
 
         # JJ : NaN checkpoint — context
         if not torch.isfinite(lvsm_context).all():
             mod_gate = self.connector_lvsm.mod_gate.item()
+            per_view_finite = True if self.vlm2context_adapt_strategy != 'film' else torch.isfinite(per_view_feat).all()
             logger.warning(
                 f"[NVS-NaN] lvsm_context has NaN/Inf! "
                 f"base finite={torch.isfinite(lvsm_base_context).all()} "
+                f"per_view_feat finite={per_view_finite} "
                 f"mod_gate={mod_gate:.4f}"
             )
             assert False, "lvsm_context contains nan"
@@ -668,6 +795,7 @@ class CustomSpatialMLLMLVSMForConditionalGeneration(CustomSpatialMLLMForConditio
         # JJ : Center-crop target GT frames to square + adapt intrinsics (same as input views)
         # NOTE: target_intrinsics are at VGGT processing resolution (= input frame H×W).
         # Assumes target frames share the same resolution; holds for same-video data.
+        t0 = self._stage_now(device)
         tgt_frames = nvs_target_frames.to(device=device, dtype=torch.float32)
         if tgt_frames.max() > 1.0:
             tgt_frames = tgt_frames / 255.0
@@ -687,6 +815,7 @@ class CustomSpatialMLLMLVSMForConditionalGeneration(CustomSpatialMLLMForConditio
         target_pose_cond = get_posed_input(
             images=None, ray_o=target_ray_o.to(dtype), ray_d=target_ray_d.to(dtype)
         )  # [1, N_tgt, 6, 256, 256] in bf16
+        self._stage_add(stage_stats, "nvs_target_prepare", t0, self._stage_now(device))
 
         # JJ : NaN checkpoint — target pose conditioning
         if not torch.isfinite(target_pose_cond).all():
@@ -696,12 +825,14 @@ class CustomSpatialMLLMLVSMForConditionalGeneration(CustomSpatialMLLMForConditio
                 f"fxfycxcy finite={torch.isfinite(target_fxfycxcy).all()}")
 
         # JJ : Decode via LVSM transformer (bf16 — required by xformers flash-attn)
+        t0 = self._stage_now(device)
         rendered_images = self.lvsm_model.decode_target_views(
             lvsm_context=lvsm_context,
             target_pose_cond=target_pose_cond,
             gradient_checkpoint=self.lvsm_grad_checkpoint,
             checkpoint_every=self.lvsm_grad_checkpoint_every,
         )  # [1, N_tgt, 3, 256, 256] in bf16
+        self._stage_add(stage_stats, "nvs_decode", t0, self._stage_now(device))
 
         # JJ : NaN checkpoint — rendered output
         if not torch.isfinite(rendered_images).all():
@@ -715,7 +846,11 @@ class CustomSpatialMLLMLVSMForConditionalGeneration(CustomSpatialMLLMForConditio
             assert False, "rendered_images contains nan"
 
         # JJ : Compute NVS loss (L2 + Perceptual)
+        t0 = self._stage_now(device)
         nvs_loss_metrics = self.nvs_loss_fn(rendered_images, target_gt)
+        self._stage_add(stage_stats, "nvs_loss", t0, self._stage_now(device))
+        stage_stats["nvs_total"] = sum(stage_stats.values())
+        nvs_loss_metrics.stage_stats = stage_stats
         # JJ : Also return rendered + GT for wandb image logging
         nvs_loss_metrics.rendered = rendered_images.detach()  # [1, N_tgt, 3, H, W]
         nvs_loss_metrics.target_gt = target_gt.detach()       # [1, N_tgt, 3, H, W]
@@ -846,6 +981,8 @@ class CustomSpatialMLLMLVSMForConditionalGeneration(CustomSpatialMLLMForConditio
         # jj: Reset per-step adapter diagnostics to avoid stale values when branches are skipped.
         self._diag_lvsm2llm_delta_ratio = None
         self._diag_llm2lvsm_delta_ratio = None
+        stage_stats = {}
+        t_forward = self._stage_now()
 
         output_attentions = output_attentions if output_attentions is not None else self.config.output_attentions
         output_hidden_states = (
@@ -878,7 +1015,9 @@ class CustomSpatialMLLMLVSMForConditionalGeneration(CustomSpatialMLLMForConditio
                 video_tchw = [v.type(self.visual.dtype) for v in video_tchw]
 
                 # QwenVL visual encoding (input frames only, no targets)
+                t0 = self._stage_now(pixel_values_videos.device)
                 video_embeds = self.visual(pixel_values_videos, grid_thw=video_grid_thw)
+                self._stage_add(stage_stats, "visual_encoder", t0, self._stage_now(pixel_values_videos.device))
                 n_video_tokens = (input_ids == self.config.video_token_id).sum().item()
                 n_video_features = video_embeds.shape[0]
                 if n_video_tokens != n_video_features:
@@ -1034,12 +1173,14 @@ class CustomSpatialMLLMLVSMForConditionalGeneration(CustomSpatialMLLMForConditio
                             )
                 else:
                     # JJ : Run VGGT on (interleaved or input-only) frames
+                    t0 = self._stage_now(vggt_tchw[0].device)
                     spatial_embeds_list, patch_start_idx, camera_encs = self.spatial_encoder(
                         vggt_tchw, grid_thw=video_grid_thw, return_cam_enc=True
                     )
                     all_extrinsics_w2c, all_intrinsics = pose_encoding_to_extri_intri(
                         camera_encs[0][-1].unsqueeze(0), vggt_tchw[0][-1].shape[-2:]
                     )
+                    self._stage_add(stage_stats, "spatial_encoder", t0, self._stage_now(vggt_tchw[0].device))
 
                     # JJ : Split poses into input / target using mask
                     if _has_nvs_targets:
@@ -1068,18 +1209,19 @@ class CustomSpatialMLLMLVSMForConditionalGeneration(CustomSpatialMLLMForConditio
                 # ============================================================
                 if self.enforce_LVSM:
                     # Phase 2: Prepare LVSM inputs (input frames + input poses only)
+                    t0 = self._stage_now(video_tchw[0].device)
                     _lvsm_images, _lvsm_input_tokens, _c2w, _fxfycxcy = self._prepare_lvsm_inputs(
                         video_tchw, self.extrinsics_w2c, self.intrisics
                     )
+                    self._stage_add(stage_stats, "prepare_lvsm_inputs", t0, self._stage_now(video_tchw[0].device))
                     
                     # Phase 3: Fuse LVSM tokens into QwenVL tokens for LLM
-                    if self.disable_lvsm2llm_fusion:                            
-                        video_embeds_base = fused_embeds
-                    else:  
-                        video_embeds_base = fused_embeds
-                        fused_embeds = self.connector_lvsm.fuse_for_llm(
-                            fused_embeds, _lvsm_input_tokens, video_grid_thw
-                        )
+                    t0 = self._stage_now(fused_embeds.device)
+                    video_embeds_base = fused_embeds
+                    fused_embeds = self.connector_lvsm.fuse_for_llm(
+                        fused_embeds, _lvsm_input_tokens, video_grid_thw
+                    )
+                    self._stage_add(stage_stats, "fuse_for_llm", t0, self._stage_now(fused_embeds.device))
                     # jj: Track actual LVSM->LLM injection magnitude for diagnosis.
                     self._diag_lvsm2llm_delta_ratio = self._safe_delta_ratio(fused_embeds, video_embeds_base)
                     # # JJ [DIAG] : Confirm whether Phase 3 corrupts embeddings before LLM
@@ -1159,6 +1301,7 @@ class CustomSpatialMLLMLVSMForConditionalGeneration(CustomSpatialMLLMForConditio
         # ============================================================
         # Phase 4: LLM Forward (existing, no modification)
         # ============================================================
+        t0 = self._stage_now(inputs_embeds.device)
         outputs = self.model(
             input_ids=None,
             position_ids=position_ids,
@@ -1167,8 +1310,7 @@ class CustomSpatialMLLMLVSMForConditionalGeneration(CustomSpatialMLLMForConditio
             inputs_embeds=inputs_embeds,
             use_cache=use_cache,
             output_attentions=output_attentions,
-            # JJ： lvsm can use other layers visual info
-            output_hidden_states=output_hidden_states or self.decoder_input_llm_layer,
+            output_hidden_states=output_hidden_states,
             return_dict=return_dict,
             cache_position=cache_position,
             RoPE_attn_mode=self.RoPE_attn_mode,
@@ -1176,6 +1318,7 @@ class CustomSpatialMLLMLVSMForConditionalGeneration(CustomSpatialMLLMForConditio
             intrisics=self.intrisics_down,
             extrinsics_w2c=self.extrinsics_w2c_down,
         )
+        self._stage_add(stage_stats, "llm_forward", t0, self._stage_now(inputs_embeds.device))
 
         hidden_states = outputs[0]
         logits = self.lm_head(hidden_states)
@@ -1186,6 +1329,7 @@ class CustomSpatialMLLMLVSMForConditionalGeneration(CustomSpatialMLLMForConditio
         loss = None
         if labels is not None:
             # CE loss (existing)
+            t0 = self._stage_now(logits.device)
             logits_float = logits.float()
             shift_logits = logits_float[..., :-1, :].contiguous()
             shift_labels = labels[..., 1:].contiguous()
@@ -1193,6 +1337,7 @@ class CustomSpatialMLLMLVSMForConditionalGeneration(CustomSpatialMLLMForConditio
             shift_logits = shift_logits.view(-1, self.config.vocab_size)
             shift_labels = shift_labels.view(-1).to(shift_logits.device)
             ce_loss = loss_fct(shift_logits, shift_labels)
+            self._stage_add(stage_stats, "ce_loss", t0, self._stage_now(logits.device))
             
             loss = ce_loss
 
@@ -1229,106 +1374,7 @@ class CustomSpatialMLLMLVSMForConditionalGeneration(CustomSpatialMLLMForConditio
 
             if _can_nvs:
                 # JJ : Extract visual hidden states from LLM output
-                # cp from spmllm: hidden dim is perfectly 1024*2, aligns with qwen2.5 hidden so that we can resue our llm2lvsm projector
-                def _preprocess_spatial_embeds(
-                    spatial_embeds_list: List[List[torch.Tensor]],
-                    patch_start_idx: List[int],
-                    grid_thw: torch.Tensor,
-                ) -> torch.Tensor:
-                    all_spatial_embeds = []
-                    grid_idx = 0
-
-                    for i, spatial_embeds_item in enumerate(spatial_embeds_list):
-
-                        # spatial_embeds_list: List[List[Float[Tensor, "S+5,P,2D"]]]
-                        spatial_embeds = spatial_embeds_item[self.spatial_embeds_layer_idx].unsqueeze(0)
-                        # spatial_embeds: Float[Tensor, "B,S,P,2D"]
-                        spatial_embeds = spatial_embeds[:, :, patch_start_idx[i]:]
-
-                        B, S, P, DD = spatial_embeds.shape
-                        assert B == 1, "batch size should be 1"
-
-                        # Find corresponding grid_thw rows
-                        accumulated_t = 0
-
-                        if grid_idx >= len(grid_thw):
-                            raise ValueError(f"Not enough grid_thw rows for spatial_embeds {i}")
-
-                        while accumulated_t * self.visual_temporal_merge_size < S:
-                            if grid_idx >= len(grid_thw):
-                                raise ValueError(
-                                    f"Not enough grid_thw rows for spatial_embeds {i}. Accumulated T={accumulated_t}, Target S={S}"
-                                )
-
-                            t, h, w = grid_thw[grid_idx].tolist()
-
-                            if accumulated_t == 0:
-                                npatch_h, npatch_w = h, w
-                            else:
-                                assert h == npatch_h and w == npatch_w, f"Spatial dimensions mismatch within video {i}"
-
-                            accumulated_t += t
-                            grid_idx += 1
-
-                        npatch_t = accumulated_t
-
-                        assert P == npatch_h * npatch_w, "patch number mismatch"
-                        assert npatch_t == S // self.visual_temporal_merge_size, "temporal patch number mismatch"
-
-                        # reshape spatial embeddings to 2D grid
-                        spatial_embeds = (
-                            spatial_embeds.view(B, S, npatch_h, npatch_w, DD).permute(0, 1, 4, 2, 3).contiguous()
-                        )  # [B, S, DD, np_h, np_w]
-
-                        spatial_embeds = (
-                            spatial_embeds.view(
-                                B,
-                                npatch_t,
-                                self.visual_temporal_merge_size,
-                                DD,
-                                npatch_h // self.visual_spatial_merge_size,
-                                self.visual_spatial_merge_size,
-                                npatch_w // self.visual_spatial_merge_size,
-                                self.visual_spatial_merge_size,
-                            )
-                            .permute(0, 1, 4, 6, 5, 7, 3, 2)
-                            .contiguous()
-                        )
-
-                        spatial_embeds = spatial_embeds.reshape(
-                            B * npatch_t * npatch_h * npatch_w, DD * self.visual_temporal_merge_size
-                        )
-                        spatial_embeds = spatial_embeds.view(
-                            -1, DD * self.visual_temporal_merge_size * self.visual_spatial_merge_size**2
-                        )
-                        all_spatial_embeds.append(spatial_embeds)
-
-                    all_spatial_embeds_concated = torch.cat(all_spatial_embeds, dim=0)
-                    return all_spatial_embeds_concated
-
-                assert not (self.decoder_input_vggt_geo and self.decoder_input_llm_layer), "decoder_input_vggt_geo and decoder_input_llm_layer cannot both be True; choose one source for NVS decoder input"
-                if self.decoder_input_vggt_geo:
-                    spatial_embeds_list, patch_start_idx, camera_encs = self.spatial_encoder(
-                        video_tchw, grid_thw=video_grid_thw, return_cam_enc=True
-                    )
-                    spatial_embeds = _preprocess_spatial_embeds(spatial_embeds_list, patch_start_idx, video_grid_thw)
-                    # JJ: Adapt packed VGGT geo tokens (merged_dim) back to Qwen width before llm2lvsm projection.
-                    if spatial_embeds.shape[-1] != self.vggt_geo_in_dim:
-                        raise RuntimeError(
-                            f"Unexpected VGGT geo dim: got {spatial_embeds.shape[-1]}, expected {self.vggt_geo_in_dim}"
-                        )
-                    visual_hidden = self.vggt_geo_proj(self.vggt_geo_norm(spatial_embeds))
-                else:
-                    if self.decoder_input_llm_layer:
-                        try:
-                            hidden_states = outputs.hidden_states[self.decoder_input_which_llm_layer]
-                        except Exception as e:
-                            logger.error(f"Failed to extract hidden states from layer {self.decoder_input_which_llm_layer}: {e}")
-                            raise
-                    else:
-                        hidden_states = outputs[0]
-
-                    visual_hidden = hidden_states[_video_token_mask]  # [L_vis, d_qwen]
+                visual_hidden = hidden_states[_video_token_mask]  # [L_vis, d_qwen]
 
                 # JJ : Select NVS target pool
                 if self.nvs_target_pool == "input":
@@ -1364,25 +1410,23 @@ class CustomSpatialMLLMLVSMForConditionalGeneration(CustomSpatialMLLMForConditio
                     lvsm_base_context=_lvsm_input_tokens,
                     video_grid_thw=video_grid_thw,
                 )
+                stage_stats.update(getattr(nvs_loss_metrics, "stage_stats", {}))
 
                 # Phase 6: Combined loss
                 nvs_loss = nvs_loss_metrics.loss
                 weighted_nvs = self.nvs_loss_weight * nvs_loss
 
                 # JJ : NaN/Inf guard — skip NVS term if not finite to avoid poisoning CE
-                if self.nvs_loss_only:
-                    loss = weighted_nvs
+                if not torch.isfinite(weighted_nvs):
+                    logger.warning(
+                        f"[NVS] NVS loss not finite! Skipping NVS term. "
+                        f"nvs={nvs_loss.item():.6f} L2={nvs_loss_metrics.l2_loss.item():.6f} "
+                        f"Percep={nvs_loss_metrics.perceptual_loss.item():.6f} "
+                        f"LPIPS={nvs_loss_metrics.lpips_loss.item():.6f} "
+                        f"gate={self.connector_lvsm.nvs_gate.item():.6f}")
+                    loss = ce_loss
                 else:
-                    if not torch.isfinite(weighted_nvs):
-                        logger.warning(
-                            f"[NVS] NVS loss not finite! Skipping NVS term. "
-                            f"nvs={nvs_loss.item():.6f} L2={nvs_loss_metrics.l2_loss.item():.6f} "
-                            f"Percep={nvs_loss_metrics.perceptual_loss.item():.6f} "
-                            f"LPIPS={nvs_loss_metrics.lpips_loss.item():.6f} "
-                            f"gate={self.connector_lvsm.nvs_gate.item():.6f}")
-                        loss = ce_loss
-                    else:
-                        loss = ce_loss + weighted_nvs
+                    loss = ce_loss + weighted_nvs
 
                 # JJ : Log LVSM sub-losses to wandb (every step)
                 _nvs_val = nvs_loss.item()
@@ -1409,6 +1453,12 @@ class CustomSpatialMLLMLVSMForConditionalGeneration(CustomSpatialMLLMForConditio
                     self._wandb_log_nvs_images(
                         nvs_loss_metrics.rendered, nvs_loss_metrics.target_gt
                 )
+                stage_stats["forward_total"] = self._stage_now(logits.device) - t_forward
+                self._stage_log(stage_stats)
+
+            if "forward_total" not in stage_stats:
+                stage_stats["forward_total"] = self._stage_now(logits.device) - t_forward
+                self._stage_log(stage_stats)
 
         if not return_dict:
             output = (logits,) + outputs[1:]

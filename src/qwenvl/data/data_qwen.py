@@ -9,6 +9,7 @@ import os
 import random
 import re
 import time
+from pathlib import Path
 from collections.abc import Sequence
 from dataclasses import dataclass, field
 from io import BytesIO
@@ -26,6 +27,9 @@ from torch.utils.data import Dataset
 
 from . import data_list
 from .rope2d import get_rope_index_2, get_rope_index_25
+
+# JJ : module-level logger for NVS warnings
+logger = logging.getLogger(__name__)
 
 IGNORE_INDEX = -100
 IMAGE_TOKEN_INDEX = 151655
@@ -210,12 +214,6 @@ class LazySupervisedDataset(Dataset):
         dataset = data_args.dataset_use.split(",")
         dataset_list = data_list(dataset)
         print(f"Loading datasets: {dataset_list}")
-        self.video_max_total_pixels = getattr(
-            data_args, "video_max_total_pixels", 1664 * 28 * 28
-        )
-        self.video_min_total_pixels = getattr(
-            data_args, "video_min_total_pixels", 256 * 28 * 28
-        )
         self.model_type = data_args.model_type
 
         if "qwen2.5" in self.model_type.lower() or "spatial-mllm" in self.model_type.lower():
@@ -265,6 +263,15 @@ class LazySupervisedDataset(Dataset):
 
         random.shuffle(list_data_dict)  # Randomly shuffle the data for training
 
+        # JJ: Optional truncation for debugging/overfitting when max_train_samples is set to a small number. Can be left as None for full dataset.
+        max_train_samples = getattr(data_args, "max_train_samples", None)
+        if max_train_samples is not None:
+            if max_train_samples <= 0:
+                raise ValueError(f"max_train_samples must be > 0, got {max_train_samples}")
+            original_len = len(list_data_dict)
+            list_data_dict = list_data_dict[:max_train_samples]
+            print(f"Truncate training samples: {original_len} -> {len(list_data_dict)} (max_train_samples={max_train_samples})")
+
         print("Formatting inputs...Skip in lazy mode")
         self.tokenizer = tokenizer
         self.list_data_dict = list_data_dict
@@ -273,6 +280,22 @@ class LazySupervisedDataset(Dataset):
         self.data_args.image_processor.min_pixels = data_args.min_pixels
         self.data_args.image_processor.size["longest_edge"] = data_args.max_pixels
         self.data_args.image_processor.size["shortest_edge"] = data_args.min_pixels
+        
+        # JJ: Precomputed pose mode (default off) — enables loading fixed indices/cameras from .pt files.
+        self.use_pre_compute_pose = bool(getattr(data_args, "use_pre_compute_pose", False))
+        self.precompute_pose_source = str(getattr(data_args, "precompute_pose_source", "vggt"))
+        self.precompute_pose_root = str(getattr(data_args, "precompute_pose_root", ""))
+        self._precompute_pose_cache = {}
+        if self.use_pre_compute_pose:
+            if self.precompute_pose_source != "vggt":
+                raise ValueError(
+                    f"Unsupported precompute_pose_source={self.precompute_pose_source}. "
+                    f"Currently only 'vggt' is supported."
+                )
+            if not self.precompute_pose_root:
+                raise ValueError(
+                    "use_pre_compute_pose=True but precompute_pose_root is empty."
+                )
 
     def __len__(self):
         return len(self.list_data_dict)
@@ -322,43 +345,65 @@ class LazySupervisedDataset(Dataset):
         image_tchw = visual_processed["processed_images"]
         return image_tensor, grid_thw, image_tchw
 
-    def process_video(self, video_file):
+    def process_video(self, video_file, frame_idx_override=None):
         if not os.path.exists(video_file):
             print(f"File not exist: {video_file}")
         vr = VideoReader(video_file, num_threads=4)
         total_frames = len(vr)
         avg_fps = vr.get_avg_fps()
         video_length = total_frames / avg_fps
-        interval = getattr(self.data_args, "base_interval", 4)
 
-        num_frames_to_sample = round(video_length / interval)
-        video_min_frames = getattr(self.data_args, "video_min_frames", 4)
-        video_max_frames = getattr(self.data_args, "video_max_frames", 8)
+        # JJ : If frame_idx_override is not provided (precompute mode off), use it directly. Otherwise, perform dynamic sampling based on video length and data_args config.
+        if frame_idx_override is None:
+            interval = getattr(self.data_args, "base_interval", 4)
 
-        target_frames = min(
-            max(num_frames_to_sample, video_min_frames), video_max_frames
-        )
+            num_frames_to_sample = round(video_length / interval)
+            video_min_frames = getattr(self.data_args, "video_min_frames", 4)
+            video_max_frames = getattr(self.data_args, "video_max_frames", 8)
 
-        # JJ : Temporal-merge-aware real-neighbour sampling
-        enforce_real_nb = getattr(self.data_args, "sampling_enforce_real_neighbour", False)
-        if enforce_real_nb and target_frames >= 4 and total_frames >= 4:
-            n_anchors = target_frames // 2
-            anchor_idx = np.linspace(0, total_frames - 1, n_anchors, dtype=int)
-            anchor_idx = np.unique(anchor_idx).tolist()
-            nb_mode = getattr(self.data_args, "neighbour_mode", "random")
-            nb_max_step = getattr(self.data_args, "neighbour_max_step", 1)
-            frame_idx = np.array(
-                _add_real_neighbours(anchor_idx, nb_mode, nb_max_step, total_frames),
-                dtype=int,
+            target_frames = min(
+                max(num_frames_to_sample, video_min_frames), video_max_frames
             )
-            # JJ : DEBUG — remove after verification
-            print(f"[real_neighbour] total={total_frames} target={target_frames} "
-                  f"anchors({len(anchor_idx)})={anchor_idx} → "
-                  f"final({len(frame_idx)})={frame_idx.tolist()}")
+
+            enforce_real_nb = getattr(self.data_args, "sampling_enforce_real_neighbour", False)
+            if enforce_real_nb and target_frames >= 4 and total_frames >= 4:
+                n_anchors = target_frames // 2
+                anchor_idx = np.linspace(0, total_frames - 1, n_anchors, dtype=int)
+                anchor_idx = np.unique(anchor_idx).tolist()
+                nb_mode = getattr(self.data_args, "neighbour_mode", "random")
+                nb_max_step = getattr(self.data_args, "neighbour_max_step", 1)
+                frame_idx = np.array(
+                    _add_real_neighbours(anchor_idx, nb_mode, nb_max_step, total_frames),
+                    dtype=int,
+                )
+                print(f"[real_neighbour] total={total_frames} target={target_frames} "
+                      f"anchors({len(anchor_idx)})={anchor_idx} → "
+                      f"final({len(frame_idx)})={frame_idx.tolist()}")
+            else:
+                frame_idx = np.linspace(0, total_frames - 1, target_frames, dtype=int)
         else:
-            frame_idx = np.linspace(0, total_frames - 1, target_frames, dtype=int)
+            # JJ: Use precomputed input frame indices directly when precompute mode is enabled.
+            frame_idx = np.asarray(frame_idx_override, dtype=int)
 
         frame_idx = np.unique(frame_idx)
+
+        # JJ : Ensure frame count is divisible by temporal_patch_size (=2).
+        # np.unique() may reduce count to odd (e.g. neighbour collides with anchor).
+        # QwenVL processor pads internally if odd → mismatch with frame_idx.
+        # Fix: insert a frame to restore even count.
+        _tps = getattr(self.data_args.image_processor, "temporal_patch_size", 2)
+        if len(frame_idx) % _tps != 0:
+            if len(frame_idx) < total_frames:
+                # Case A: video has unused frames → insert midpoint of largest gap
+                gaps = np.diff(frame_idx)
+                best_gap_idx = int(np.argmax(gaps))
+                mid = int((frame_idx[best_gap_idx] + frame_idx[best_gap_idx + 1]) // 2)
+                frame_idx = np.sort(np.append(frame_idx, mid))
+            else:
+                # Case B: all frames already selected → duplicate last frame
+                # (mirrors QwenVL processor internal padding behaviour)
+                frame_idx = np.append(frame_idx, frame_idx[-1])
+
         video = vr.get_batch(frame_idx).asnumpy()
         fps = getattr(self.data_args, "video_frame_fps", None)
         if fps is None:
@@ -384,18 +429,107 @@ class LazySupervisedDataset(Dataset):
         # JJ : Return frame_idx so NVS can use actual input indices
         return video_tensor, grid_thw, second_per_grid_ts, video_tchw, frame_idx
 
+    # JJ: Resolve .pt path 
+    def _resolve_precompute_pose_pt(self, sample_item):
+        video_field = sample_item.get("video", None)
+        if video_field is None:
+            raise RuntimeError("use_pre_compute_pose=True but sample has no 'video' field.")
+        if isinstance(video_field, list):
+            if len(video_field) != 1:
+                raise RuntimeError(
+                    f"use_pre_compute_pose=True only supports single-video sample, got {len(video_field)}."
+                )
+            video_key = video_field[0]
+        else:
+            video_key = video_field
+
+        rel = Path(video_key.lstrip("/"))
+        pt_rel = rel.with_suffix(".pt") if rel.suffix else Path(str(rel) + ".pt")
+        pose_pt = Path(self.precompute_pose_root) / pt_rel
+        return str(pose_pt), str(video_key)
+
+    # JJ: Load precomputed pose/index package from disk, with caching to avoid redundant loads for the same video across epochs.
+    def _load_precompute_pose_info(self, sample_item):
+        pose_pt, video_key = self._resolve_precompute_pose_pt(sample_item)
+        if pose_pt in self._precompute_pose_cache:
+            return self._precompute_pose_cache[pose_pt]
+        if not os.path.exists(pose_pt):
+            raise RuntimeError(
+                f"[precompute_pose] Missing .pt for video_key={video_key}: {pose_pt}"
+            )
+        pkg = torch.load(pose_pt, map_location="cpu", weights_only=False)
+        required = [
+            "input_frame_indices",
+            "novel_pool_indices",
+            "nvs_is_input_mask",
+            "input_extrinsics_w2c",
+            "input_intrinsics",
+            "target_extrinsics_w2c",
+            "target_intrinsics",
+        ]
+        missing = [k for k in required if k not in pkg]
+        if missing:
+            raise RuntimeError(
+                f"[precompute_pose] Missing keys {missing} in {pose_pt}"
+            )
+
+        in_idx = torch.as_tensor(pkg["input_frame_indices"], dtype=torch.long)
+        novel_idx = torch.as_tensor(pkg["novel_pool_indices"], dtype=torch.long)
+        nvs_mask = torch.as_tensor(pkg["nvs_is_input_mask"], dtype=torch.bool)
+        if nvs_mask.sum().item() != int(in_idx.numel()):
+            raise RuntimeError(
+                f"[precompute_pose] nvs mask/input count mismatch in {pose_pt}: "
+                f"mask_true={nvs_mask.sum().item()} vs input_idx={in_idx.numel()}"
+            )
+        if (~nvs_mask).sum().item() != int(novel_idx.numel()):
+            raise RuntimeError(
+                f"[precompute_pose] nvs mask/novel count mismatch in {pose_pt}: "
+                f"mask_false={(~nvs_mask).sum().item()} vs novel_idx={novel_idx.numel()}"
+            )
+        pkg["_pose_pt_path"] = pose_pt
+        pkg["_video_key"] = video_key
+        self._precompute_pose_cache[pose_pt] = pkg
+        return pkg
+
+    # JJ: Get NVS target frames based on precomputed novel_pool_indices and nvs_is_input_mask from the .pt package, instead of online random sampling. This ensures fixed targets across epochs for consistent LVSM training.
+    def _get_nvs_target_frames_from_indices(self, video_file, input_video_tchw,
+                                            target_indices, nvs_is_input_mask):
+        vr = VideoReader(video_file, num_threads=4)
+        target_indices = np.asarray(target_indices, dtype=int).tolist()
+        if len(target_indices) == 0:
+            raise RuntimeError(
+                f"[precompute_pose] Empty novel_pool_indices for video={video_file}"
+            )
+        target_frames_data = vr.get_batch(target_indices).asnumpy()
+        target_tensor = (
+            torch.from_numpy(target_frames_data.copy())
+            .permute(0, 3, 1, 2)
+            .float()
+            / 255.0
+        )
+        _, _, H, W = input_video_tchw.shape
+        if target_tensor.shape[2] != H or target_tensor.shape[3] != W:
+            target_tensor = F.interpolate(
+                target_tensor, size=(H, W), mode="bilinear", align_corners=False
+            )
+        nvs_mask = torch.as_tensor(nvs_is_input_mask, dtype=torch.bool)
+        if (~nvs_mask).sum().item() != target_tensor.shape[0]:
+            raise RuntimeError(
+                f"[precompute_pose] nvs mask false count != loaded target count for {video_file}: "
+                f"{(~nvs_mask).sum().item()} vs {target_tensor.shape[0]}"
+            )
+        return target_tensor, nvs_mask
+
     # ================================================================
     # JJ : Sample novel target frames for NVS (between consecutive input frames)
     # ================================================================
     def _get_nvs_target_frames(self, video_file, input_video_tchw,
                                input_frame_indices=None):
         """
-        JJ : Sample novel target frames from gaps between consecutive input frames.
-        Re-opens the video to read intermediate frames. Skips gaps with no space.
-
-        When input_frame_indices is provided (from process_video), uses those
-        exact indices so NVS targets never overlap with actual input frames.
-        Otherwise falls back to re-deriving indices via np.linspace (legacy).
+        JJ : Sample N_in novel target frames from the interior of the video
+        (between first and last input frame, excluding input frames themselves).
+        Always targets N_in samples regardless of enforce_real_neighbour mode.
+        Falls back to fewer if the video is too short.
 
         Args:
             video_file:           str  - full path to video file
@@ -435,37 +569,46 @@ class LazySupervisedDataset(Dataset):
         input_set = set(frame_idx.tolist())
 
         # ------------------------------------------------------------------
-        # JJ : Gap-based sampling — one novel frame per gap between consecutive
-        #      input frames.  With real-neighbour input, tight pairs (e.g.
-        #      anchor=6, neighbour=7) have no gap and are automatically skipped,
-        #      so NVS targets land only in informative wide gaps.
+        # JJ : Uniform NVS sampling — always target N_in novel frames from
+        #      the interior range [first_input+1, last_input) excluding inputs.
+        #      Works identically for both uniform and real-neighbour sampling.
         # ------------------------------------------------------------------
-        target_indices = []
-        target_slot_map = []  # which gap each target belongs to
-        for k in range(N_in - 1):
-            lo = int(frame_idx[k]) + 1
-            hi = int(frame_idx[k + 1])
-            if lo < hi:
-                target_indices.append(random.randint(lo, hi - 1))
-                target_slot_map.append(k)
+        first_in, last_in = int(frame_idx[0]), int(frame_idx[-1])
+        available = sorted(set(range(first_in + 1, last_in)) - input_set)
+        if not available:
+            # Dummy fallback — duplicate a random input frame as target
+            # so LVSM params always receive gradient (DDP requirement).
+            logger.warning(
+                f"[NVS-DUMMY] No novel frames available for NVS. "
+                f"video={video_file}, total_frames={total_frames}, N_in={N_in}, "
+                f"frame_idx={frame_idx.tolist()}, first_in={first_in}, last_in={last_in}. "
+                f"Using 1 duplicated input frame as dummy target."
+            )
+            dummy_idx = int(frame_idx[N_in // 2])  # middle input frame
+            dummy_frame = input_video_tchw[N_in // 2:N_in // 2 + 1]  # [1, C, H, W]
+            # mask: all True (input) + one False (dummy target) at the middle
+            is_input_mask = [True] * (N_in // 2) + [False] + [True] * (N_in - N_in // 2)
+            return dummy_frame, torch.tensor(is_input_mask, dtype=torch.bool)
 
-        # JJ : Fallback — if all gaps are tight, sample from any non-input frame
-        if not target_indices:
-            available = sorted(set(range(total_frames)) - input_set)
-            if not available:
-                return None, None
-            n_sample = min(max(1, N_in - 1), len(available))
-            target_indices = sorted(random.sample(available, n_sample))
-            # Build slot_map: insert each target after its closest preceding input
-            target_slot_map = []
-            for tidx in target_indices:
-                slot = 0
-                for k in range(N_in):
-                    if frame_idx[k] <= tidx:
-                        slot = k
-                    else:
-                        break
-                target_slot_map.append(min(slot, N_in - 2))
+        n_sample = min(N_in, len(available))
+        if n_sample < N_in:
+            logger.warning(
+                f"[NVS-SHORT] Only {len(available)} novel frames available, "
+                f"need {N_in}. video={video_file}, total_frames={total_frames}, "
+                f"N_in={N_in}, first_in={first_in}, last_in={last_in}. "
+                f"Sampling {n_sample} instead."
+            )
+        target_indices = sorted(random.sample(available, n_sample))
+        # Build slot_map — each target placed after its closest preceding input
+        target_slot_map = []
+        for tidx in target_indices:
+            slot = 0
+            for k in range(N_in):
+                if frame_idx[k] <= tidx:
+                    slot = k
+                else:
+                    break
+            target_slot_map.append(min(slot, N_in - 2))
 
         N_tgt = len(target_indices)
         target_frames_data = vr.get_batch(target_indices).asnumpy()  # [N_tgt, H, W, 3]
@@ -581,8 +724,13 @@ class LazySupervisedDataset(Dataset):
             video_folder = self.list_data_dict[i].get("video_root", self.list_data_dict[i]["data_path"])
             video_file = self.list_data_dict[i]["video"]
             _video_frame_idx = None  # JJ : Actual frame indices; set for single-video, None for multi-video
+            _pre_pose_pkg = None
             if isinstance(video_file, List):
                 if len(video_file) > 1:
+                    if self.use_pre_compute_pose:
+                        raise RuntimeError(
+                            "use_pre_compute_pose=True does not support multi-video sample."
+                        )
                     video_file = [
                         os.path.join(video_folder, file) for file in video_file
                     ]
@@ -591,11 +739,25 @@ class LazySupervisedDataset(Dataset):
                 else:
                     video_file = video_file[0]
                     video_file = os.path.join(video_folder, video_file)
-                    video, grid_thw, second_per_grid_ts, video_tchw, _video_frame_idx = self.process_video(video_file)
+                    if self.use_pre_compute_pose:
+                        _pre_pose_pkg = self._load_precompute_pose_info(self.list_data_dict[i])
+                        _video_frame_idx = torch.as_tensor(_pre_pose_pkg["input_frame_indices"], dtype=torch.long).cpu().numpy()
+                        video, grid_thw, second_per_grid_ts, video_tchw, _video_frame_idx = self.process_video(
+                            video_file, frame_idx_override=_video_frame_idx
+                        )
+                    else:
+                        video, grid_thw, second_per_grid_ts, video_tchw, _video_frame_idx = self.process_video(video_file)
                     video = [video]
             else:
                 video_file = os.path.join(video_folder, video_file)
-                video, grid_thw, second_per_grid_ts, video_tchw, _video_frame_idx = self.process_video(video_file)
+                if self.use_pre_compute_pose:
+                    _pre_pose_pkg = self._load_precompute_pose_info(self.list_data_dict[i])
+                    _video_frame_idx = torch.as_tensor(_pre_pose_pkg["input_frame_indices"], dtype=torch.long).cpu().numpy()
+                    video, grid_thw, second_per_grid_ts, video_tchw, _video_frame_idx = self.process_video(
+                        video_file, frame_idx_override=_video_frame_idx
+                    )
+                else:
+                    video, grid_thw, second_per_grid_ts, video_tchw, _video_frame_idx = self.process_video(video_file)
                 video = [video]
             grid_thw_merged = copy.deepcopy(grid_thw)
             if not isinstance(grid_thw, Sequence):
@@ -645,17 +807,44 @@ class LazySupervisedDataset(Dataset):
             data_dict["video_grid_thw"] = grid_thw
             data_dict["video_tchw"] = video_tchw
 
-            # JJ : Sample NVS target frames if enabled (for novel view synthesis)
+        # JJ : Sample NVS target frames if enabled (for novel view synthesis)
+        if "video" in self.list_data_dict[i]:
             # Only supports single-video input; multi-video NVS is not supported.
-            _nvs_tchw = video_tchw[0] if isinstance(video_tchw, (tuple, list)) else video_tchw
+            _nvs_tchw = video_tchw[0] if isinstance(video_tchw, (tuple, list)) else video_tchw # nvs shared video_tchw as we enforce the same number
             if getattr(self.data_args, "nvs_enabled", False) and _nvs_tchw is not None and isinstance(_nvs_tchw, torch.Tensor):
                 _nvs_vf = video_file if isinstance(video_file, str) else video_file[0]
-                nvs_tgt, nvs_mask = self._get_nvs_target_frames(
-                    _nvs_vf, _nvs_tchw, input_frame_indices=_video_frame_idx
-                )
+                if self.use_pre_compute_pose:
+                    if _pre_pose_pkg is None:
+                        raise RuntimeError("use_pre_compute_pose=True but precomputed pose package is missing in _get_item.")
+                    # no online random sampling - reading from precomputed as it is
+                    nvs_tgt, nvs_mask = self._get_nvs_target_frames_from_indices(
+                        _nvs_vf,
+                        _nvs_tchw,
+                        target_indices=torch.as_tensor(_pre_pose_pkg["novel_pool_indices"], dtype=torch.long).cpu().numpy(),
+                        nvs_is_input_mask=torch.as_tensor(_pre_pose_pkg["nvs_is_input_mask"], dtype=torch.bool),
+                    )
+                else:
+                    # internally online random sample novel target frames for NVS without precompute
+                    nvs_tgt, nvs_mask = self._get_nvs_target_frames(
+                        _nvs_vf, _nvs_tchw, input_frame_indices=_video_frame_idx
+                    )
                 if nvs_tgt is not None:
                     data_dict["nvs_target_tchw"] = nvs_tgt
                     data_dict["nvs_is_input_mask"] = nvs_mask
+                    if self.use_pre_compute_pose:
+                        # jj: Pass precomputed VGGT cameras to model for online-pose replacement path.
+                        data_dict["precomputed_input_extrinsics_w2c"] = torch.as_tensor(
+                            _pre_pose_pkg["input_extrinsics_w2c"]
+                        )
+                        data_dict["precomputed_input_intrinsics"] = torch.as_tensor(
+                            _pre_pose_pkg["input_intrinsics"]
+                        )
+                        data_dict["precomputed_target_extrinsics_w2c"] = torch.as_tensor(
+                            _pre_pose_pkg["target_extrinsics_w2c"]
+                        )
+                        data_dict["precomputed_target_intrinsics"] = torch.as_tensor(
+                            _pre_pose_pkg["target_intrinsics"]
+                        )
 
         return data_dict
 
@@ -771,6 +960,19 @@ class DataCollatorForSupervisedDataset(object):
             batch["nvs_target_tchw"] = nvs_target_tchw
         if nvs_is_input_mask:
             batch["nvs_is_input_mask"] = nvs_is_input_mask
+        # jj: Forward precomputed camera tensors when dataset uses precomputed pose package.
+        pre_in_ext = [instance["precomputed_input_extrinsics_w2c"] for instance in instances if "precomputed_input_extrinsics_w2c" in instance]
+        pre_in_int = [instance["precomputed_input_intrinsics"] for instance in instances if "precomputed_input_intrinsics" in instance]
+        pre_tg_ext = [instance["precomputed_target_extrinsics_w2c"] for instance in instances if "precomputed_target_extrinsics_w2c" in instance]
+        pre_tg_int = [instance["precomputed_target_intrinsics"] for instance in instances if "precomputed_target_intrinsics" in instance]
+        if pre_in_ext:
+            batch["precomputed_input_extrinsics_w2c"] = pre_in_ext
+        if pre_in_int:
+            batch["precomputed_input_intrinsics"] = pre_in_int
+        if pre_tg_ext:
+            batch["precomputed_target_extrinsics_w2c"] = pre_tg_ext
+        if pre_tg_int:
+            batch["precomputed_target_intrinsics"] = pre_tg_int
 
         return batch
 

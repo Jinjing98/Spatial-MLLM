@@ -34,6 +34,7 @@ from transformers import (
     Qwen2VLForConditionalGeneration,
     Qwen2VLImageProcessor,
     Trainer,
+    TrainerCallback, # used for monitor intermidiate grad norms for LVSM adapter diagnosis
 )
 
 import src.qwenvl.train.trainer
@@ -42,6 +43,82 @@ from src.qwenvl.model.spatial_mllm import SpatialMLLMConfig, SpatialMLLMForCondi
 from src.qwenvl.preprocessor.image_processing_qwen2_vl import Qwen2VLImageProcessorModified
 from src.qwenvl.train.argument import DataArguments, ModelArguments, TrainingArguments
 from src.qwenvl.train.trainer import replace_qwen2_vl_attention_class
+
+
+# jj: Log minimal per-bridge (llm2lvsm lvsm2llm) grad norms at pre-optimizer-step for LVSM adaptor diagnosis.
+class LVSMBridgeGradMonitorCallback(TrainerCallback):
+    def __init__(self, log_interval: int = 10):
+        self.log_interval = max(1, int(log_interval))
+
+    @staticmethod
+    def _unwrap_model(model):
+        cur = model
+        while hasattr(cur, "module"):
+            cur = cur.module
+        return cur
+
+    @staticmethod
+    def _global_grad_norm(params):
+        total = None
+        for p in params:
+            if p.requires_grad and p.grad is not None:
+                g = p.grad.detach().float()
+                sq = g.pow(2).sum()
+                total = sq if total is None else total + sq
+        if total is None:
+            return 0.0
+        return torch.sqrt(total).item()
+
+    def on_pre_optimizer_step(self, args, state, control, model=None, **kwargs):
+        if model is None or not args.should_log:
+            return
+        if (state.global_step + 1) % self.log_interval != 0:
+            return
+        if args.process_index != 0:
+            return
+
+        root_model = self._unwrap_model(model)
+        connector = getattr(root_model, "connector_lvsm", None)
+        if connector is None:
+            return
+
+        lvsm2llm_params = []
+        llm2lvsm_params = []
+        vggt2qwen_params = []# 16384-dim merged VGGT geo tokens can have large gradients during early training, so monitor separately for diagnosis.
+        for name, p in connector.named_parameters():
+            if name.startswith("lvsm_norm.") or name.startswith("lvsm_proj.") or name == "nvs_gate":
+                lvsm2llm_params.append(p)
+            elif (
+                name.startswith("view_norm.")
+                or name.startswith("view_proj.")
+                or name.startswith("gamma_head.")
+                or name.startswith("beta_head.")
+                or name == "mod_gate"
+                or name.startswith("cross_attn.")
+            ):
+                llm2lvsm_params.append(p)
+        # JJ: Monitor optional VGGT->Qwen bridge module gradients together with existing bridge diagnostics.
+        for module_name in ("vggt_geo_norm", "vggt_geo_proj"):
+            module = getattr(root_model, module_name, None)
+            if module is not None:
+                for p in module.parameters():
+                    if p.requires_grad:
+                        vggt2qwen_params.append(p)
+
+        try:
+            import wandb
+            if wandb.run is None:
+                return
+            wandb.log(
+                {
+                    "grad/lvsm2llm_grad_norm": self._global_grad_norm(lvsm2llm_params),
+                    "grad/llm2lvsm_grad_norm": self._global_grad_norm(llm2lvsm_params),
+                    "grad/vggt2qwen_grad_norm": self._global_grad_norm(vggt2qwen_params),
+                },
+                commit=False,
+            )
+        except ImportError:
+            return
 
 
 # JJ: Add reproducibility control
@@ -148,6 +225,12 @@ def set_model(model_args, model):
         else:
             for n, p in model.connector_lvsm.named_parameters():
                 p.requires_grad = False
+    # JJ: Keep VGGT->Qwen bridge trainability aligned with LVSM adaptor switch for reproducible ablation behavior.
+    for module_name in ("vggt_geo_norm", "vggt_geo_proj"):
+        module = getattr(model, module_name, None)
+        if module is not None:
+            for n, p in module.named_parameters():
+                p.requires_grad = bool(model_args.tune_mm_connector_lvsm)
 
     if hasattr(model, "lvsm_model"):
         # JJ : LVSM base: freeze everything first
@@ -199,6 +282,7 @@ def get_model(model_args, data_args, training_args, attn_implementation="flash_a
             "nvs_target_pool": getattr(model_args, 'nvs_target_pool', 'nvs'),
             "lvsm2qwen_type": getattr(model_args, 'lvsm2qwen_type', 'linear'),
             "llm2lvsm_type": getattr(model_args, 'llm2lvsm_type', 'linear'),
+            "vlm2context_adapt_strategy": getattr(model_args, 'vlm2context_adapt_strategy', 'patch_residual'),
         }
 
         spatial_mllm_lvsm_config = CustomSpatialMLLMLVSMConfig.from_pretrained(
@@ -231,6 +315,7 @@ def get_model(model_args, data_args, training_args, attn_implementation="flash_a
         # Must be done here because post_init() in __init__ re-initializes
         # all nn.Linear modules, destroying weights loaded during __init__.
         model.load_lvsm_checkpoint()
+        print(f"[INFO] LVSM checkpoint loaded from {model_args.lvsm_checkpoint_path}")
         model.lvsm_model.to(device=device, dtype=dtype)
 
         image_processor = Qwen2VLImageProcessorModified.from_pretrained(
@@ -453,9 +538,21 @@ def train(attn_implementation="flash_attention_2"):
         data_module['data_collator'] = custom_spatial_mllm_collator_wrapper
     
     trainer = Trainer(
-        model=model, processing_class=tokenizer, args=training_args, **data_module
+        model=model,
+        processing_class=tokenizer,
+        args=training_args,
+        callbacks=[LVSMBridgeGradMonitorCallback(log_interval=10)], # Add LVSM grad monitor callback
+        **data_module,
     )
-    
+
+    # JJ : Force non-reentrant gradient checkpointing for DDP compatibility.
+    # Reentrant checkpointing (default) re-runs forward during backward, which
+    # triggers DDP all-reduce hooks twice per parameter → "marked ready twice" error.
+    # Non-reentrant mode avoids this by using saved_tensors_hooks instead.
+    # Setting here because shell cannot reliably pass JSON to HfArgumentParser.
+    if training_args.gradient_checkpointing:
+        trainer.args.gradient_checkpointing_kwargs = {"use_reentrant": False}
+
     # JJ : Print total parameters count after Trainer initialization
     # Note: Must be done after Trainer init because DeepSpeed ZeRO-3 wraps the model
     # and parameters are not fully accessible before that

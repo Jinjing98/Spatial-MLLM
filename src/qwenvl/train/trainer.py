@@ -384,13 +384,14 @@ def create_optimizer(self):
         # lvsm_model (decoder) stays in default group → uses base --learning_rate.
         lvsm_adaptor_lr = getattr(self.args, 'lvsm_adaptor_lr', None)
         if lvsm_adaptor_lr is not None and lvsm_adaptor_lr > 0:
-            # Collect connector_lvsm param ids only
+            # JJ: Collect LVSM adaptor params (connector_lvsm + optional VGGT->Qwen bridge) into the same LR bucket.
             lvsm_param_ids = set()
-            module = getattr(opt_model, 'connector_lvsm', None)
-            if module is not None:
-                for p in module.parameters():
-                    if p.requires_grad:
-                        lvsm_param_ids.add(id(p))
+            for module_name in ('connector_lvsm', 'vggt_geo_norm', 'vggt_geo_proj'):
+                module = getattr(opt_model, module_name, None)
+                if module is not None:
+                    for p in module.parameters():
+                        if p.requires_grad:
+                            lvsm_param_ids.add(id(p))
 
             if lvsm_param_ids:
                 # Remove LVSM params from existing groups
