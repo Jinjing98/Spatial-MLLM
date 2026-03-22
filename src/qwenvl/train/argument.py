@@ -34,11 +34,20 @@ class ModelArguments:
     tune_mm_connector_lvsm: bool = field(default=True, metadata={"help": "Whether to train connector_lvsm (should always be True)"})
 
     # JJ :  NVS related fine-tuning config (mostly for ablation/debugging purposes; can be left as default for normal training)
-    tune_lvsm_decoder: bool = field(default=True, metadata={"help": "Unfreeze LVSM transformer_blocks + image_token_decoder (keep image_tokenizer frozen)"})
+    tune_lvsm_decoder: bool = field(default=True, metadata={"help": "Legacy switch for LVSM decoder unfreeze. Prefer --lvsm_trainable_modules for explicit control."})
+    # JJ : Explicit LVSM trainable module whitelist (validated in set_model). Default matches current experiment behavior.
+    lvsm_trainable_modules: List[str] = field(
+        default_factory=lambda: ["transformer_blocks", "transformer_input_layernorm", "image_token_decoder"],
+        metadata={"help": "LVSM trainable modules whitelist. Allowed: transformer_blocks, transformer_input_layernorm, image_token_decoder, image_tokenizer, target_pose_tokenizer"},
+    )
     nvs_img_log_interval: int = field(default=50, metadata={"help": "Log rendered vs GT images to wandb every N steps (0=disable)"})
     nvs_target_pool: str = field(default="nvs", metadata={"help": "NVS target pool: 'nvs' (novel only), 'input' (input frames only), 'all' (input + novel)"})
     lvsm2qwen_type: str = field(default="linear", metadata={"help": "Phase-3 adapter type (LVSM→QwenVL). Currently only 'linear'."})
     llm2lvsm_type: str = field(default="linear", metadata={"help": "Phase-5 adapter type (LLM→LVSM). Currently only 'linear'."})
+    pluker_token_only_for_lvsm2llm: bool = field(
+        default=False,
+        metadata={"help": "Debug only. Use Plucker-only(6D) target_pose_tokenizer output as LVSM->LLM tokens (keep connector dims unchanged)."},
+    )
     vlm2context_adapt_strategy: str = field(
         default="patch_residual",
         metadata={"help": "Phase-5 context adaptation: 'film' (current) or 'patch_residual' (ctx=base+g*delta_patch)."},
@@ -91,5 +100,6 @@ class TrainingArguments(transformers.TrainingArguments):
     )
     mm_projector_lr: Optional[float] = None
     vision_tower_lr: Optional[float] = None
-    # JJ : Separate lr for LVSM adaptor (connector_lvsm only; lvsm_model uses base lr)
+    # JJ : Separate lr controls for LVSM branches; defaults keep existing base-lr behavior.
     lvsm_adaptor_lr: Optional[float] = field(default=None, metadata={"help": "Learning rate for connector_lvsm. lvsm_model (decoder) uses base --learning_rate instead."})
+    lvsm_decoder_lr: Optional[float] = field(default=None, metadata={"help": "Learning rate for LVSM trainable modules selected by --lvsm_trainable_modules."})

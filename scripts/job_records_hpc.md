@@ -6,6 +6,14 @@
 train full dataset
 3076680 _4x4_hpc_naiveqwen25_enforceRealNbrAfter1step_precomputePose
 
+补录(仅根据已保存模型目录，job id 待确认)
+unknown(可能是 3076680) 20260317_223914_spatial-mllm-sft_4x4_hpc_naiveqwen25_enforceRealNbrAfter1step_precomputePose_fulldata
+model_path: /home/jixu233b/Projects/VLM_3D/SpatialMllmHallucinate/third_party/Spatial-MLLM/train_experiments/train/spatialmllm/20260317_223914_spatial-mllm-sft_4x4_hpc_naiveqwen25_enforceRealNbrAfter1step_precomputePose_fulldata
+config_hint: enforce_LVSM=False, wandb_run=z1wb1vcb, steps=8446
+unknown 20260317_141138_spatial-mllm-sft_4x4_hpc_LVSMnvs01_6view_AllTar_sft_llm2lvsmPatchwise_precomputePoseNbrafter1_fulldata
+model_path: /home/jixu233b/Projects/VLM_3D/SpatialMllmHallucinate/third_party/Spatial-MLLM/train_experiments/train/spatialmllm/20260317_141138_spatial-mllm-sft_4x4_hpc_LVSMnvs01_6view_AllTar_sft_llm2lvsmPatchwise_precomputePoseNbrafter1_fulldata
+config_hint: enforce_LVSM=True, wandb_run=5m6p8s2j, steps=8446
+
 16.03
 3076439: precompute precompute_pose_vggt_16_pa: SAMPLING_ENFORCE_REAL_NEIGHBOUR 16 NEIGHBOUR_MODE after NEIGHBOUR_MAX_STEP 1
 3076490 evaçl qwen3 uniform+wo helper identiy

@@ -190,8 +190,17 @@ class CustomSpatialMLLMLVSMForConditionalGeneration(CustomSpatialMLLMForConditio
         #/////debug
         #///used when inject vggt geo feat
         self.disable_lvsm2llm_fusion = True
-        self.disable_llm2lvsm_fusion = True
+        self.pluker_token_only_for_lvsm2llm = True
+
+        self.disable_llm2lvsm_fusion = False
+        print(f"[DEBUG] pluker_token_only_for_lvsm2llm={self.pluker_token_only_for_lvsm2llm}, disable_lvsm2llm_fusion={self.disable_lvsm2llm_fusion}")
+        print(f"[DEBUG] disable_llm2lvsm_fusion={self.disable_llm2lvsm_fusion}")
         self.nvs_loss_only = False#True
+        if self.pluker_token_only_for_lvsm2llm and self.disable_lvsm2llm_fusion:
+            logger.warning(
+                "[DEBUG] pluker_token_only_for_lvsm2llm=True but disable_lvsm2llm_fusion=True; "
+                "pluker-only lvsm2llm debug branch will not be used until lvsm2llm fusion is enabled."
+            )
 
         # JJ: mirror connector geometry attrs for decoder_input_vggt_geo path
         self.spatial_embeds_layer_idx = -1
@@ -448,6 +457,22 @@ class CustomSpatialMLLMLVSMForConditionalGeneration(CustomSpatialMLLMForConditio
         B = c2w.shape[0]
         N = raw_frames.shape[0]
         lvsm_input_tokens = lvsm_input_tokens.reshape(B, N * n_patches, d)
+
+        # JJ: pluker_token_only_for_lvsm2llm debug branch.
+        # In this mode, we replace the whole LVSM token stream with Plücker-only tokens
+        # (6ch -> d_lvsm via target_pose_tokenizer), so both LVSM->LLM and NVS context use it.
+        if self.pluker_token_only_for_lvsm2llm:
+            pose_cond = get_posed_input(
+                images=None, ray_o=ray_o.to(dtype), ray_d=ray_d.to(dtype)
+            )  # [B, N, 6, H, W]
+            with torch.no_grad():
+                lvsm_input_tokens = self.lvsm_model.target_pose_tokenizer(pose_cond)
+            lvsm_input_tokens = lvsm_input_tokens.reshape(B, N * n_patches, d).to(dtype=posed_input.dtype)
+            if lvsm_input_tokens.shape != (B, N * n_patches, d):
+                raise ValueError(
+                    f"[LVSM-debug] token shape mismatch in pluker-only mode: "
+                    f"got={tuple(lvsm_input_tokens.shape)}, expected={(B, N * n_patches, d)}"
+                )
 
         return lvsm_images, lvsm_input_tokens, c2w, fxfycxcy
 

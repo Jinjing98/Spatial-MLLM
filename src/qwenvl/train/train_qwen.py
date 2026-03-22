@@ -236,15 +236,44 @@ def set_model(model_args, model):
         # JJ : LVSM base: freeze everything first
         for n, p in model.lvsm_model.named_parameters():
             p.requires_grad = False
-        # JJ : Selectively unfreeze transformer_blocks + image_token_decoder
-        if getattr(model_args, 'tune_lvsm_decoder', False):
-            for n, p in model.lvsm_model.transformer_blocks.named_parameters():
+        # JJ : Resolve LVSM trainable-module whitelist with strict sanity check.
+        # Keep legacy `tune_lvsm_decoder=False` behavior for backward compatibility when list is default.
+        allowed_lvsm_modules = {
+            "transformer_blocks": getattr(model.lvsm_model, "transformer_blocks", None),
+            "transformer_input_layernorm": getattr(model.lvsm_model, "transformer_input_layernorm", None),
+            "image_token_decoder": getattr(model.lvsm_model, "image_token_decoder", None),
+            "image_tokenizer": getattr(model.lvsm_model, "image_tokenizer", None),
+            "target_pose_tokenizer": getattr(model.lvsm_model, "target_pose_tokenizer", None),
+        }
+        default_lvsm_modules = ["transformer_blocks", "transformer_input_layernorm", "image_token_decoder"]
+        requested_lvsm_modules = list(getattr(model_args, "lvsm_trainable_modules", default_lvsm_modules))
+        requested_lvsm_modules = [m.strip() for m in requested_lvsm_modules if isinstance(m, str) and m.strip()]
+
+        invalid_modules = sorted(set(requested_lvsm_modules) - set(allowed_lvsm_modules.keys()))
+        if invalid_modules:
+            raise ValueError(
+                f"Invalid --lvsm_trainable_modules: {invalid_modules}. "
+                f"Allowed: {sorted(allowed_lvsm_modules.keys())}"
+            )
+
+        # Deduplicate while preserving order for stable logging/reproducibility.
+        unique_requested_modules = []
+        for module_name in requested_lvsm_modules:
+            if module_name not in unique_requested_modules:
+                unique_requested_modules.append(module_name)
+
+        if not getattr(model_args, "tune_lvsm_decoder", False) and unique_requested_modules == default_lvsm_modules:
+            print("[INFO] tune_lvsm_decoder=False detected; override lvsm_trainable_modules to [] for backward compatibility.")
+            unique_requested_modules = []
+
+        for module_name in unique_requested_modules:
+            module = allowed_lvsm_modules[module_name]
+            if module is None:
+                raise ValueError(f"LVSM module `{module_name}` not found in model.lvsm_model")
+            for n, p in module.named_parameters():
                 p.requires_grad = True
-            for n, p in model.lvsm_model.image_token_decoder.named_parameters():
-                p.requires_grad = True
-            for n, p in model.lvsm_model.transformer_input_layernorm.named_parameters():
-                p.requires_grad = True
-            # JJ : image_tokenizer + target_pose_tokenizer stay frozen
+        model._lvsm_trainable_modules_resolved = unique_requested_modules
+        print(f"[INFO] LVSM trainable modules: {unique_requested_modules}")
 
     if hasattr(model, "nvs_loss_fn"):
         # JJ : NVS loss modules are always frozen
@@ -282,6 +311,7 @@ def get_model(model_args, data_args, training_args, attn_implementation="flash_a
             "nvs_target_pool": getattr(model_args, 'nvs_target_pool', 'nvs'),
             "lvsm2qwen_type": getattr(model_args, 'lvsm2qwen_type', 'linear'),
             "llm2lvsm_type": getattr(model_args, 'llm2lvsm_type', 'linear'),
+            "pluker_token_only_for_lvsm2llm": getattr(model_args, 'pluker_token_only_for_lvsm2llm', False),
             "vlm2context_adapt_strategy": getattr(model_args, 'vlm2context_adapt_strategy', 'patch_residual'),
         }
 

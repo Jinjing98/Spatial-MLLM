@@ -53,6 +53,7 @@ class LVSMConnector(nn.Module):
         self.spatial_merge_size = spatial_merge_size
         self.lvsm_spatial_size = lvsm_spatial_size
         self.lvsm_n_patches = lvsm_spatial_size ** 2  # 1024 patches per frame
+        self.lvsm2llm_in_dim = self.d_lvsm
         self.lvsm2qwen_type = lvsm2qwen_type
         self.llm2lvsm_type = llm2lvsm_type
         self.vlm2context_adapt_strategy = vlm2context_adapt_strategy

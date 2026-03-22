@@ -108,6 +108,9 @@ TUNE_LLM=True                   # Qwen LLM backbone + lm_head
 # JJ : LVSM-specific (only when MODEL_TYPE=custom-spatial-mllm-lvsm)
 TUNE_CONNECTOR_LVSM=True        # connector_lvsm (FiLM adaptor)
 TUNE_LVSM_DECODER=True          # lvsm_model transformer_blocks + image_token_decoder
+# JJ : Explicit LVSM trainable module whitelist (must be within the 5 allowed module names).
+# Default equals current experiment behavior: unfreeze 3 modules, keep tokenizers frozen.
+LVSM_TRAINABLE_MODULES="transformer_blocks transformer_input_layernorm image_token_decoder"
 
 # ============ Learning rates ============
 lr=7e-6                          # base lr (LLM, spatial_encoder, lvsm_model if unfrozen)
@@ -118,6 +121,9 @@ mm_projector_lr=2e-5             # visual.merger + connector (MLPAddConnector)
 # so it needs a normal learning rate to train — NOT the tiny fine-tuning rate.
 # Range: 1e-5 (conservative) ~ 5e-5 (aggressive). Match mm_projector_lr as baseline.
 LVSM_ADAPTOR_LR=2e-5
+# JJ : Separate lr for LVSM modules selected by LVSM_TRAINABLE_MODULES.
+# Keep as base lr for reproducibility unless explicitly overridden.
+LVSM_DECODER_LR=4e-4 # default to base lr 7e-6 for reproducibility of early models; recommend 4e-4 for low-res LVSM, 4e-5 for high-res LVSM
 weight_decay=0.1
 max_grad_norm=1.0
 
@@ -270,18 +276,20 @@ if [ "$MODEL_TYPE" = "custom-spatial-mllm-lvsm" ]; then
     --vgg_weight_file ${VGG_WEIGHT_FILE} \
     --tune_mm_connector_lvsm ${TUNE_CONNECTOR_LVSM} \
     --tune_lvsm_decoder ${TUNE_LVSM_DECODER} \
+    --lvsm_trainable_modules ${LVSM_TRAINABLE_MODULES} \
     --nvs_enabled ${NVS_ENABLED} \
     --use_pre_compute_pose ${USE_PRE_COMPUTE_POSE} \
     --precompute_pose_source ${PRECOMPUTE_POSE_SOURCE} \
     --precompute_pose_root ${PRECOMPUTE_POSE_ROOT} \
     --nvs_img_log_interval ${NVS_IMG_LOG_INTERVAL} \
     --lvsm_adaptor_lr ${LVSM_ADAPTOR_LR} \
+    --lvsm_decoder_lr ${LVSM_DECODER_LR} \
     --nvs_target_pool ${NVS_TARGET_POOL} \
     --lvsm2qwen_type ${LVSM2QWEN_TYPE} \
     --llm2lvsm_type ${LLM2LVSM_TYPE} \
     --vlm2context_adapt_strategy ${VLM2CONTEXT_ADAPT_STRATEGY} \
     --enable_sdpa_gating ${ENABLE_SDPA_GATING}"
-    echo "[Training] LVSM integration enabled: ckpt=${LVSM_CHECKPOINT_PATH}, nvs_weight=${NVS_LOSS_WEIGHT}, lvsm_adaptor_lr=${LVSM_ADAPTOR_LR}"
+    echo "[Training] LVSM integration enabled: ckpt=${LVSM_CHECKPOINT_PATH}, nvs_weight=${NVS_LOSS_WEIGHT}, lvsm_adaptor_lr=${LVSM_ADAPTOR_LR}, lvsm_decoder_lr=${LVSM_DECODER_LR}, lvsm_trainable_modules=${LVSM_TRAINABLE_MODULES}"
     echo "[Training] SDPA gating: ${ENABLE_SDPA_GATING}"
 fi
 

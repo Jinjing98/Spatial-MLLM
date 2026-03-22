@@ -86,7 +86,10 @@ PRETRAINED_MODEL_NAME_OR_PATH="Qwen/Qwen2.5-VL-3B-Instruct"
 # RUN_NAME_APPENDIX="_8sa_knowview_nvsloss_decodefromrandom"
 # RUN_NAME_APPENDIX="_8sa_knowview_nvsloss_decodefromclip"
 # RUN_NAME_APPENDIX="_8sa_knowview_nvsloss_decodefromvggt"
-RUN_NAME_APPENDIX="_8sa_knowview_nvsloss_celoss_lre-4_decodefromllm"
+
+# RUN_NAME_APPENDIX="_8sa_knowview_nvsloss_celoss_lre-4_decodefromllm_lvsm2llmfuseon_plukertoken_only"
+# RUN_NAME_APPENDIX="_8sa_knowview_nvsloss_celoss_lre-4_decodefromllm_lvsm2llmfuseon_plukertoken_only_llm2lvsmfusionon_sameplukeronlycontext"
+RUN_NAME_APPENDIX="_8sa_knowview_nvsloss_celoss_lre-4_decodefromllm_llm2lvsmfusionon_plukeronlycontext"
 
 #tmux1 3173410  _8sa_knowview_nvsloss_decodefromrandom
 #tmux0 3173413  _8sa_knowview_nvsloss_decodefromllm
@@ -123,6 +126,10 @@ TUNE_LLM=False                   # Qwen LLM backbone + lm_head
 # JJ : LVSM-specific (only when MODEL_TYPE=custom-spatial-mllm-lvsm)
 TUNE_CONNECTOR_LVSM=True        # connector_lvsm (FiLM adaptor)
 TUNE_LVSM_DECODER=True          # lvsm_model transformer_blocks + image_token_decoder
+# JJ : Explicit LVSM trainable module whitelist (must be within the 5 allowed module names).
+# Default equals current experiment behavior: unfreeze 3 modules, keep tokenizers frozen.
+# options: "transformer_blocks", "transformer_input_layernorm", "image_token_decoder", "image_tokenizer", "target_pose_tokenizer"
+LVSM_TRAINABLE_MODULES="transformer_blocks transformer_input_layernorm image_token_decoder"
 
 # ============ Learning rates ============
 LR_SCHEDULER_TYPE="cosine" # default "cosine" #constant_with_warmup
@@ -134,6 +141,9 @@ mm_projector_lr=2e-5             # visual.merger + connector (MLPAddConnector)
 # so it needs a normal learning rate to train — NOT the tiny fine-tuning rate.
 # Range: 1e-5 (conservative) ~ 5e-5 (aggressive). Match mm_projector_lr as baseline.
 LVSM_ADAPTOR_LR=2e-5
+# JJ : Separate lr for LVSM decoder (lvsm_model.transformer_blocks + image_token_decoder).
+# Keep as base lr for reproducibility unless explicitly overridden.
+LVSM_DECODER_LR=4e-4 #recommend value 4e-4 in lvsm low res; 4e-5 is recommmend for high-res
 weight_decay=0.1
 max_grad_norm=1.0
 
@@ -293,18 +303,20 @@ if [ "$MODEL_TYPE" = "custom-spatial-mllm-lvsm" ]; then
     --vgg_weight_file ${VGG_WEIGHT_FILE} \
     --tune_mm_connector_lvsm ${TUNE_CONNECTOR_LVSM} \
     --tune_lvsm_decoder ${TUNE_LVSM_DECODER} \
+    --lvsm_trainable_modules ${LVSM_TRAINABLE_MODULES} \
     --nvs_enabled ${NVS_ENABLED} \
     --use_pre_compute_pose ${USE_PRE_COMPUTE_POSE} \
     --precompute_pose_source ${PRECOMPUTE_POSE_SOURCE} \
     --precompute_pose_root ${PRECOMPUTE_POSE_ROOT} \
     --nvs_img_log_interval ${NVS_IMG_LOG_INTERVAL} \
     --lvsm_adaptor_lr ${LVSM_ADAPTOR_LR} \
+    --lvsm_decoder_lr ${LVSM_DECODER_LR} \
     --nvs_target_pool ${NVS_TARGET_POOL} \
     --lvsm2qwen_type ${LVSM2QWEN_TYPE} \
     --llm2lvsm_type ${LLM2LVSM_TYPE} \
     --vlm2context_adapt_strategy ${VLM2CONTEXT_ADAPT_STRATEGY} \
     --enable_sdpa_gating ${ENABLE_SDPA_GATING}"
-    echo "[Training] LVSM integration enabled: ckpt=${LVSM_CHECKPOINT_PATH}, nvs_weight=${NVS_LOSS_WEIGHT}, lvsm_adaptor_lr=${LVSM_ADAPTOR_LR}"
+    echo "[Training] LVSM integration enabled: ckpt=${LVSM_CHECKPOINT_PATH}, nvs_weight=${NVS_LOSS_WEIGHT}, lvsm_adaptor_lr=${LVSM_ADAPTOR_LR}, lvsm_decoder_lr=${LVSM_DECODER_LR}, lvsm_trainable_modules=${LVSM_TRAINABLE_MODULES}"
     echo "[Training] SDPA gating: ${ENABLE_SDPA_GATING}"
 fi
 

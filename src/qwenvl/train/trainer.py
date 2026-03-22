@@ -423,6 +423,70 @@ def create_optimizer(self):
                 print(f"[Optimizer] LVSM adaptor param groups: lr={lvsm_adaptor_lr}, "
                       f"decay={len(lvsm_decay_params)}, no_decay={len(lvsm_no_decay_params)}")
 
+        # JJ : Optional separate lr group for LVSM trainable modules selected by model_args.lvsm_trainable_modules.
+        # Default None keeps old behavior: these params stay in base --learning_rate group.
+        lvsm_decoder_lr = getattr(self.args, 'lvsm_decoder_lr', None)
+        if lvsm_decoder_lr is not None and lvsm_decoder_lr > 0:
+            allowed_prefix_by_module = {
+                "transformer_blocks": "lvsm_model.transformer_blocks.",
+                "transformer_input_layernorm": "lvsm_model.transformer_input_layernorm.",
+                "image_token_decoder": "lvsm_model.image_token_decoder.",
+                "image_tokenizer": "lvsm_model.image_tokenizer.",
+                "target_pose_tokenizer": "lvsm_model.target_pose_tokenizer.",
+            }
+            default_lvsm_modules = ["transformer_blocks", "transformer_input_layernorm", "image_token_decoder"]
+            requested_lvsm_modules = list(getattr(opt_model, "_lvsm_trainable_modules_resolved", default_lvsm_modules))
+            requested_lvsm_modules = [m.strip() for m in requested_lvsm_modules if isinstance(m, str) and m.strip()]
+            invalid_modules = sorted(set(requested_lvsm_modules) - set(allowed_prefix_by_module.keys()))
+            if invalid_modules:
+                raise ValueError(
+                    f"Invalid lvsm_trainable_modules in model config: {invalid_modules}. "
+                    f"Allowed: {sorted(allowed_prefix_by_module.keys())}"
+                )
+
+            # Deduplicate while preserving order for stable optimizer diagnostics.
+            unique_requested_modules = []
+            for module_name in requested_lvsm_modules:
+                if module_name not in unique_requested_modules:
+                    unique_requested_modules.append(module_name)
+            lvsm_decoder_prefixes = tuple(
+                allowed_prefix_by_module[module_name] for module_name in unique_requested_modules
+            )
+            lvsm_decoder_param_ids = {
+                id(p)
+                for n, p in opt_model.named_parameters()
+                if p.requires_grad and n.startswith(lvsm_decoder_prefixes)
+            }
+
+            if lvsm_decoder_param_ids:
+                # Remove LVSM decoder params from existing groups first to avoid duplication.
+                for group in optimizer_grouped_parameters:
+                    group["params"] = [p for p in group["params"] if id(p) not in lvsm_decoder_param_ids]
+
+                lvsm_decoder_decay_params = []
+                lvsm_decoder_no_decay_params = []
+                for n, p in opt_model.named_parameters():
+                    if id(p) in lvsm_decoder_param_ids:
+                        if n in decay_parameters:
+                            lvsm_decoder_decay_params.append(p)
+                        else:
+                            lvsm_decoder_no_decay_params.append(p)
+
+                if lvsm_decoder_decay_params:
+                    optimizer_grouped_parameters.append({
+                        "params": lvsm_decoder_decay_params,
+                        "weight_decay": self.args.weight_decay,
+                        "lr": lvsm_decoder_lr,
+                    })
+                if lvsm_decoder_no_decay_params:
+                    optimizer_grouped_parameters.append({
+                        "params": lvsm_decoder_no_decay_params,
+                        "weight_decay": 0.0,
+                        "lr": lvsm_decoder_lr,
+                    })
+                print(f"[Optimizer] LVSM decoder param groups: lr={lvsm_decoder_lr}, modules={unique_requested_modules}, "
+                      f"decay={len(lvsm_decoder_decay_params)}, no_decay={len(lvsm_decoder_no_decay_params)}")
+
         optimizer_cls, optimizer_kwargs = Trainer.get_optimizer_cls_and_kwargs(
             self.args
         )
