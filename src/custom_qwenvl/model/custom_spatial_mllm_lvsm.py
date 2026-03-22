@@ -207,7 +207,7 @@ class CustomSpatialMLLMLVSMForConditionalGeneration(CustomSpatialMLLMForConditio
         self.visual_temporal_merge_size = 2
         self.visual_spatial_merge_size = 2
 
-        self.decoder_input_llm_layer = True
+        self.decoder_input_llm_layer = False #True
         self.random_reset_decoder_input_token =False
         self.decoder_input_vggt_geo = False#True
         if self.decoder_input_vggt_geo:

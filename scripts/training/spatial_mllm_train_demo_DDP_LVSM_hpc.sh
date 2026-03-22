@@ -80,8 +80,11 @@ PRETRAINED_MODEL_NAME_OR_PATH="Qwen/Qwen2.5-VL-3B-Instruct"
 # RUN_NAME_APPENDIX="_4x4_hpc_LVSMnvs01_12view_AllTar_sft_llm2lvsmPatchwise_enforceRealNbrAfter1step_precomputePose_02data"
 
 # full dataset
-RUN_NAME_APPENDIX="_4x4_hpc_naiveqwen25_enforceRealNbrAfter1step_precomputePose_fulldata"
+# RUN_NAME_APPENDIX="_4x4_hpc_naiveqwen25_enforceRealNbrAfter1step_precomputePose_fulldata"
 # RUN_NAME_APPENDIX="_4x4_hpc_LVSMnvs01_6view_AllTar_sft_llm2lvsmPatchwise_precomputePoseNbrafter1_fulldata"
+RUN_NAME_APPENDIX="_4x4_hpc_v2_LVSMnvs01_6view_AllTar_sft_llm2lvsmfusionon_plukeronlycontext_precompute_declr4e4_fulldata"
+# RUN_NAME_APPENDIX="_8sa_knowview_nvsloss_celoss_lre-4_decodefromllm_llm2lvsmfusionon_plukeronlycontext"
+
 
 #3077400  _4x4_hpc_LVSMnvs01_6view_AllTar_sft_llm2lvsmPatchwise_precomputePoseNbrafter1_fulldata
 #3077402  _4x4_hpc_naiveqwen25_enforceRealNbrAfter1step_precomputePose_fulldata
@@ -128,8 +131,8 @@ weight_decay=0.1
 max_grad_norm=1.0
 
 # ============ LVSM integration config (only for custom-spatial-mllm-lvsm) ============
-ENFORCE_LVSM=False
-NVS_ENABLED=False    
+ENFORCE_LVSM=True
+NVS_ENABLED=True    
 
 # ENFORCE_LVSM=True
 # NVS_ENABLED=True         # JJ : Load novel target frames for NVS loss
